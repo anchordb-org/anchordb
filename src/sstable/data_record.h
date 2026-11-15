@@ -24,89 +24,81 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-// Self-describing record format shared by data.bin and the WiscKey value log
-// (vLog), so recovery, integrity checks and vLog GC share one codec.
+// Self-describing record format used by data.bin and the WiscKey value log
+// (vLog).  The stateless encode/decode functions below are the single
+// implementation of this layout; RecordWriter, RecordReader and
+// RecordBufferReader all call them.
+//
+// data.bin stores inline and tombstone records, and an index slot addresses a
+// record by its (offset, size) in data.bin.  The vLog stores blob records with
+// the same layout, but a blob's index slot addresses only the value bytes
+// inside a vLog record (file_id, value offset, value size), never the record
+// header.
 //
 // clang-format off
 /*
-    +-------------------+-------------+----------------+-------------------+-----------------+---------------------+-----------+-----------+-----------------------+
-    | magic_number (4B) | crc32 (4B)  | timestamp (8B) | key_size (Varint) |    key_bytes    | value_size (Varint) | type (1B) | flag (1B) |      value_bytes      |
-    +-------------------+-------------+----------------+-------------------+-----------------+---------------------+-----------+-----------+-----------------------+
-                                                                             [Raw User Key]     [type | flag | ]                             [Raw String Bytes OR]
-                                                                                                  [value_bytes]                                 [WiscKey Handle]
+    +-------------+----------------+-----------+-------------------+-----------------+---------------------+-----------------------+
+    | crc32 (4B)  | timestamp (8B) | type (1B) | key_size (Varint) |    key_bytes    | value_size (Varint) |      value_bytes      |
+    +-------------+----------------+-----------+-------------------+-----------------+---------------------+-----------------------+
+                                                                        [Raw User Key]                     [Raw String Bytes]
 */
 // clang-format on
 //
 // Field details:
-//   - magic_number: kDataRecordMagic, stored little-endian.
 //   - crc32:        masked CRC32 (see util/crc32.h) computed over every byte
 //                   that follows the crc32 field (timestamp .. value_bytes).
 //   - timestamp:    uint64_t, little-endian.
-//   - type:         ValueType byte (value / deletion).
-//   - flag:         ValueFlag byte (inline_ / blob).  When flag == blob the
-//                   value_bytes hold an encoded BlobHandle (see
-//                   encode_blob_handle) instead of the raw value.
-inline constexpr uint32_t kDataRecordMagic = 0x42444E41u; // "ANDB"
+//   - type:         EntryType byte: tombstone (0x0), inline_ (0x1), or blob
+//                   (0x2).
+//   - key_size:     varint64 byte count of key_bytes.
+//     value_size:   varint64 byte count of value_bytes.
 
-inline constexpr size_t kDataRecordMagicSize = sizeof(uint32_t);     // 4
 inline constexpr size_t kDataRecordCrcSize = sizeof(uint32_t);       // 4
 inline constexpr size_t kDataRecordTimestampSize = sizeof(uint64_t); // 8
 
-// Fixed prefix before key_size: magic + crc + timestamp.
+// Fixed prefix before key_size: crc + timestamp + type.
 inline constexpr size_t kDataRecordHeaderSize =
-    kDataRecordMagicSize + kDataRecordCrcSize + kDataRecordTimestampSize; // 16
+    kDataRecordCrcSize + kDataRecordTimestampSize + sizeof(uint8_t); // 13
 
-// type + flag.
-inline constexpr size_t kDataRecordValueMetaSize =
-    sizeof(uint8_t) + sizeof(uint8_t); // 2
+// Largest key a record may carry.  The writer rejects a larger key and every
+// decoder reports one as corruption.
+inline constexpr size_t kDataRecordMaxKeySize = UINT16_MAX;
 
 // A fully decoded record.  `key` and `value` are zero-copy views into the
 // buffer that was decoded and must not outlive it.
 struct ParsedDataRecord {
     std::string_view key;
     std::string_view value;
-    ValueType type = ValueType::value;
-    ValueFlag flag = ValueFlag::inline_;
+    EntryType type = EntryType::Inline;
     uint64_t timestamp = 0;
 
-    // True when value holds an encoded BlobHandle (a WiscKey pointer) rather
-    // than the raw value bytes.
-    bool is_blob() const { return flag == ValueFlag::blob; }
+    // True when this record holds a large value that belongs in the vLog
+    // instead of inline in data.bin.  In a vLog record the value bytes are
+    // still in `value`; the index slot addresses them directly.
+    bool is_blob() const { return type == EntryType::Blob; }
     // True when this record marks a deleted key.
-    bool is_deletion() const { return type == ValueType::deletion; }
+    bool is_deletion() const { return type == EntryType::Tombstone; }
 };
 
-// Returns the exact number of bytes encode_data_record() will append for a
-// record with the given key and value sizes.  Useful for pre-reserving output.
+// Returns the exact number of bytes encode_data_record() appends for a record
+// with the given key and value sizes.
 size_t data_record_encoded_len(size_t key_size, size_t value_size);
 
-// Appends one record to *dst and returns the number of bytes appended.  The
-// CRC is computed and patched in after the payload is written.
-//
-// `value_bytes` is the raw value when flag == inline_, or an already-encoded
-// BlobHandle when flag == blob.
+// Appends one record to *dst and returns the number of bytes appended.
+// `value_bytes` is the raw value (for a record written to the vLog, the blob
+// payload).  `key` must not exceed kDataRecordMaxKeySize and `type` must be a
+// valid EntryType; both are asserted.  The masked CRC is computed and patched
+// in after the payload is written.
 size_t encode_data_record(std::string *dst, uint64_t timestamp,
                           std::string_view key, std::string_view value_bytes,
-                          ValueType type, ValueFlag flag);
+                          EntryType type);
 
-// Convenience overload that encodes `handle` as the value and sets
-// flag == ValueFlag::blob.
-size_t encode_data_record(std::string *dst, uint64_t timestamp,
-                          std::string_view key, const BlobHandle &handle,
-                          ValueType type = ValueType::value);
-
-// Decodes one record from the front of *input and advances *input past it.  On
-// success fills *result; on failure *input is left unchanged.  Magic, all
-// lengths and the CRC are validated before *result is populated.
+// Decodes one record from the front of *input and advances *input past it.  Any
+// trailing bytes are left for the next call, so this can walk a buffer holding
+// several records.  The views in *result point into the original buffer.
 Status decode_data_record(std::string_view *input, ParsedDataRecord *result);
 
-// Convenience overload that decodes from a fixed view without a cursor.
+// Decodes exactly one complete record from `record` (no trailing bytes).
 Status decode_data_record(std::string_view input, ParsedDataRecord *result);
-
-// Computes the total encoded size of the record at the front of `input` without
-// requiring the key/value payload to be present.  Sets *complete = false (with
-// *total_size as a minimum retry length) while too few bytes are available.
-Status data_record_size(std::string_view input, size_t *total_size,
-                        bool *complete);
 
 } // namespace ANCHORDB_NAMESPACE

@@ -16,6 +16,7 @@
 
 #include "anchordb/anchordb_namespace.h"
 #include "anchordb/comparator.h"
+#include "db/db_format.h"
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -24,9 +25,10 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-// Size of the summary header: the index-block segment size the table was built
-// with.  Written once at the very start of summary.bin.
-inline constexpr size_t kSummaryBlockSizeSize = sizeof(uint32_t); // 4 bytes
+// Size of the summary header: the index-block segment size and the id of the
+// compressor used for every index block.  Written once at the start of
+// summary.bin.
+inline constexpr size_t kSummaryHeaderSize = 2 * sizeof(uint32_t); // 8 bytes
 
 // Fixed on-disk sizes of a summary index entry's non-key fields.
 inline constexpr size_t kSummaryKeyLenSize = sizeof(uint32_t); // 4 bytes
@@ -49,18 +51,24 @@ struct SummaryEntry {
 // size.
 //
 // Buffer encoding (little-endian):
-//   | block_size (4B) | entry* |
+//   | block_size (4B) | compressor_id (4B) | entry* |
 // where each entry is:
 //   | key_len (4B) | key_bytes (key_len B) | block_offset (8B) |
 //   | compressed_size (4B) |
 //
 // The leading block_size header records the index-block segment size for the
-// whole table.  Entries must be added in ascending key order.
+// whole table; compressor_id records the Compressor::id used to compress every
+// index block (0 = blocks stored verbatim).  Readers use it to reject a table
+// opened with a different codec. Entries must be added in ascending key order.
 class SummaryIndexWriter {
   public:
-    // `block_size` is the index-block segment size for the whole table and is
-    // written as the summary header.
-    explicit SummaryIndexWriter(uint32_t block_size);
+    // `block_size` is the index-block segment size for the whole table;
+    // `compressor_id` is the codec used for the index blocks (0 when they are
+    // stored verbatim).  Both are written as the summary header. `max_key_size`
+    // bounds the separator keys stored in the summary and must match the limit
+    // used for the corresponding index blocks.
+    explicit SummaryIndexWriter(uint32_t block_size, uint32_t compressor_id = 0,
+                                size_t max_key_size = kDefaultMaxKeySize);
 
     SummaryIndexWriter(const SummaryIndexWriter &) = delete;
     SummaryIndexWriter &operator=(const SummaryIndexWriter &) = delete;
@@ -74,10 +82,16 @@ class SummaryIndexWriter {
     // Index-block segment size this summary was built for.
     uint32_t block_size() const { return block_size_; }
 
+    // Compressor id the index blocks were written with (0 = verbatim).
+    uint32_t compressor_id() const { return compressor_id_; }
+
+    // Maximum accepted separator-key length in bytes.
+    size_t max_key_size() const { return max_key_size_; }
+
     // Appends one (last_key, absolute_block_offset, compressed_size) triple.
     // `compressed_size` is the on-disk byte length of the block at
-    // block_offset.  Returns false (and writes nothing) if the key is too long
-    // to encode in 32 bits.
+    // block_offset.  Returns false (and writes nothing) if the key exceeds
+    // max_key_size().
     bool add(std::string_view key, uint64_t block_offset,
              uint32_t compressed_size);
 
@@ -91,10 +105,13 @@ class SummaryIndexWriter {
     size_t byte_size() const { return buffer_.size(); }
 
   private:
-    // Appends the leading block_size header that starts the buffer.
+    // Appends the leading block_size | compressor_id header that starts the
+    // buffer.
     void write_header_();
 
     uint32_t block_size_ = 0;
+    uint32_t compressor_id_ = 0;
+    size_t max_key_size_ = kDefaultMaxKeySize;
     std::string buffer_;
     size_t entry_count_ = 0;
 };
@@ -116,6 +133,10 @@ class SummaryIndexReader {
     // Index-block segment size recorded in the summary header.  Only meaningful
     // when valid() is true; zero otherwise.
     uint32_t block_size() const { return block_size_; }
+
+    // Compressor id recorded in the summary header (0 = blocks stored
+    // verbatim).  Only meaningful when valid() is true.
+    uint32_t compressor_id() const { return compressor_id_; }
 
     // Finds the block that may contain `target`: the first entry whose key is
     // >= target.  On success stores its absolute block offset and returns true;
@@ -141,6 +162,7 @@ class SummaryIndexReader {
     Comparator comparator_;
     std::vector<SummaryEntry> entries_;
     uint32_t block_size_ = 0;
+    uint32_t compressor_id_ = 0;
     bool valid_;
 };
 

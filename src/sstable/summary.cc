@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "sstable/idx_summary.h"
+#include "sstable/summary.h"
 #include "util/coding.h"
 #include <cstdint>
 #include <string_view>
@@ -32,20 +32,24 @@ const Comparator kByteWiseComparator{&ByteWiseCompare, nullptr, nullptr,
                                      nullptr};
 } // namespace
 
-SummaryIndexWriter::SummaryIndexWriter(uint32_t block_size)
-    : block_size_(block_size) {
+SummaryIndexWriter::SummaryIndexWriter(uint32_t block_size,
+                                       uint32_t compressor_id,
+                                       size_t max_key_size)
+    : block_size_(block_size), compressor_id_(compressor_id),
+      max_key_size_(max_key_size) {
     write_header_();
 }
 
 void SummaryIndexWriter::write_header_() {
-    char header_buf[kSummaryBlockSizeSize];
+    char header_buf[kSummaryHeaderSize];
     encode_fixed_32(header_buf, block_size_);
-    buffer_.append(header_buf, kSummaryBlockSizeSize);
+    encode_fixed_32(header_buf + sizeof(uint32_t), compressor_id_);
+    buffer_.append(header_buf, kSummaryHeaderSize);
 }
 
 bool SummaryIndexWriter::add(std::string_view key, uint64_t block_offset,
                              uint32_t compressed_size) {
-    if (key.size() > UINT32_MAX) { return false; }
+    if (key.size() > max_key_size_) { return false; }
 
     char length_buf[kSummaryKeyLenSize];
     encode_fixed_32(length_buf, static_cast<uint32_t>(key.size()));
@@ -67,20 +71,22 @@ bool SummaryIndexWriter::add(std::string_view key, uint64_t block_offset,
 
 SummaryIndexReader::SummaryIndexReader(std::string_view buffer,
                                        Comparator comparator)
-    : comparator_(comparator), block_size_(0), valid_(true) {
+    : comparator_(comparator), block_size_(0), compressor_id_(0), valid_(true) {
     if (comparator_.compare == nullptr) { comparator_ = kByteWiseComparator; }
 
     const char *p = buffer.data();
     const char *limit = p + buffer.size();
 
-    // The buffer must start with the block_size header; a zero block size is
-    // meaningless and marks the summary malformed.
-    if (static_cast<size_t>(limit - p) < kSummaryBlockSizeSize) {
+    // The buffer must start with the block_size | compressor_id header; a zero
+    // block size is meaningless and marks the summary malformed.
+    if (static_cast<size_t>(limit - p) < kSummaryHeaderSize) {
         valid_ = false;
         return;
     }
     block_size_ = decode_fixed_32(p);
-    p += kSummaryBlockSizeSize;
+    p += sizeof(uint32_t);
+    compressor_id_ = decode_fixed_32(p);
+    p += sizeof(uint32_t);
     if (block_size_ == 0) {
         valid_ = false;
         return;

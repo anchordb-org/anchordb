@@ -60,11 +60,11 @@ class FilterBlockBuilder {
     bool enabled() const { return enabled_; }
 
     // Adds one user key.  No-op when disabled.
-    void add_key(std::string_view user_key);
+    void add(std::string_view user_key);
 
     // Number of distinct keys collected (after dropping consecutive
     // duplicates).
-    size_t key_count() const { return keys_.size(); }
+    size_t count() const { return keys_.size(); }
 
     // Serializes the filter and returns the file contents.  Idempotent; returns
     // an empty string when disabled.

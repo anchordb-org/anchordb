@@ -25,10 +25,9 @@
 namespace ANCHORDB_NAMESPACE {
 
 // Encoded size of the value returned by an index block iterator's value():
-//   [ value_type (1B) | value_flag (1B) | data_size (4B) | offset (8B) |
-//     timestamp (8B) ]
+//   [ type (1B) | file_id (4B) | size (4B) | offset (8B) | timestamp (8B) ]
 // Decode it with IndexBlockReader::decode_value().
-inline constexpr size_t kIndexValueSize = sizeof(uint8_t) + sizeof(uint8_t) +
+inline constexpr size_t kIndexValueSize = sizeof(uint8_t) + sizeof(uint32_t) +
                                           sizeof(uint32_t) + sizeof(uint64_t) +
                                           sizeof(uint64_t);
 
@@ -42,9 +41,9 @@ struct IndexBlockEntry {
 // Parses an index block segment produced by IndexBlockWriter.  All returned
 // views point into the block buffer, which must outlive this reader.
 //
-// `block_size` is aligned the same way the writer aligns it (see
-// round_index_block_size); only the first `block_size` bytes are parsed.
-// valid() is false if the block is truncated or otherwise malformed.
+// `block_size` is clamped to [4KB, 64KB] and aligned the same way the writer
+// aligns it (see round_index_block_size); only the first `block_size` bytes are
+// parsed.  valid() is false if the block is truncated or otherwise malformed.
 class IndexBlockReader {
   public:
     explicit IndexBlockReader(std::string_view block,

@@ -20,9 +20,9 @@
 #include "anchordb/filter.h"
 #include "anchordb/status.h"
 #include "db/db_format.h"
-#include "sstable/filter_block.h"
+#include "sstable/filter.h"
 #include "sstable/idx_block_writer.h"
-#include "sstable/idx_summary.h"
+#include "sstable/summary.h"
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -77,16 +77,18 @@ struct IndexTableContents {
 // index and summary; a disabled (null) filter produces an empty filter buffer.
 class IndexTableBuilder {
   public:
-    // `block_size` is the fixed index-block segment size, aligned exactly like
-    // IndexBlockWriter.  A null comparator falls back to bytewise comparison; a
-    // null compressor stores blocks uncompressed.  `compression_level` is
-    // passed straight to the compressor.  A null filter disables the per-table
-    // filter output.
+    // `block_size` is the fixed index-block segment size, clamped to [4KB,
+    // 64KB] and aligned exactly like IndexBlockWriter.  `max_key_size` bounds
+    // accepted key lengths (default 4KB) but is capped to block_size / 4.  A
+    // null comparator falls back to bytewise comparison; a null compressor
+    // stores blocks uncompressed.  `compression_level` is passed straight to
+    // the compressor.  A null filter disables the per-table filter output.
     explicit IndexTableBuilder(size_t block_size,
                                const Comparator &comparator = Comparator{},
                                Compressor compressor = Compressor{},
                                int compression_level = 0,
-                               Filter filter = Filter{});
+                               Filter filter = Filter{},
+                               size_t max_key_size = kDefaultMaxKeySize);
 
     IndexTableBuilder(const IndexTableBuilder &) = delete;
     IndexTableBuilder &operator=(const IndexTableBuilder &) = delete;
@@ -94,16 +96,21 @@ class IndexTableBuilder {
     // The (aligned) index-block segment size this builder was created with.
     size_t block_size() const { return block_writer_.block_size(); }
 
+    // Effective maximum accepted key length in bytes.
+    size_t max_key_size() const { return block_writer_.max_key_size(); }
+
     // Appends one index entry.  Returns Status::ok() on success, or
     // Status::invalid_argument if the key/timestamp ordering is violated, the
     // entry is too large to encode, or the builder has already finished.
     Status add(std::string_view key, const ValueHandle &handle,
                uint64_t timestamp);
 
-    // Convenience overload taking the handle fields directly.  `data_size` is
-    // the total encoded layout size of the referenced data record.
-    Status add(std::string_view key, ValueType type, ValueFlag flag,
-               uint64_t data_offset, uint32_t data_size, uint64_t timestamp);
+    // Convenience overload taking the handle fields directly.  `file_id` is the
+    // vLog file id for blob entries and is ignored (stored as 0) for inline_
+    // and tombstone entries.  `size` is the encoded data-record size for inline
+    // entries or the value size for blob entries.
+    Status add(std::string_view key, EntryType type, uint32_t file_id,
+               uint64_t offset, uint32_t size, uint64_t timestamp);
 
     // Number of blocks already sealed and appended to the index buffer.
     size_t block_count() const { return block_count_; }

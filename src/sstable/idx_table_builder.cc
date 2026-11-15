@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "sstable/idx_table_builder.h"
 #include "anchordb/status.h"
 #include "sstable/idx_block_writer.h"
-#include "sstable/idx_summary.h"
+#include "sstable/idx_table_builder.h"
+#include "sstable/summary.h"
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -29,10 +29,14 @@ namespace ANCHORDB_NAMESPACE {
 IndexTableBuilder::IndexTableBuilder(size_t block_size,
                                      const Comparator &comparator,
                                      Compressor compressor,
-                                     int compression_level, Filter filter)
+                                     int compression_level, Filter filter,
+                                     size_t max_key_size)
     : comparator_(comparator), compressor_(compressor),
-      compression_level_(compression_level), block_writer_(block_size),
-      summary_(static_cast<uint32_t>(block_writer_.block_size())),
+      compression_level_(compression_level),
+      block_writer_(block_size, max_key_size),
+      summary_(static_cast<uint32_t>(block_writer_.block_size()),
+               compressor.compress != nullptr ? compressor.id : 0,
+               block_writer_.max_key_size()),
       filter_builder_(filter) {
     if (comparator_.compare == nullptr) {
         comparator_ = new_byte_wise_comparator();
@@ -49,8 +53,9 @@ Status IndexTableBuilder::add(std::string_view key, const ValueHandle &handle,
     // Reject entries that could never fit in a single (configurable) block, so
     // the retry after a flush below is guaranteed to succeed.
     const size_t payload_size =
-        sizeof(uint32_t) + key.size() + sizeof(uint64_t);
-    if (key.size() > UINT32_MAX || payload_size > block_writer_.block_size()) {
+        sizeof(uint16_t) + key.size() + sizeof(uint64_t);
+    if (key.size() > block_writer_.max_key_size() ||
+        payload_size > block_writer_.block_size()) {
         return Status::invalid_argument("index table builder: key too large");
     }
 
@@ -83,14 +88,14 @@ Status IndexTableBuilder::add(std::string_view key, const ValueHandle &handle,
     last_key_.assign(key);
     last_timestamp_ = timestamp;
     ++entry_count_;
-    filter_builder_.add_key(key);
+    filter_builder_.add(key);
     return Status::ok();
 }
 
-Status IndexTableBuilder::add(std::string_view key, ValueType type,
-                              ValueFlag flag, uint64_t data_offset,
-                              uint32_t data_size, uint64_t timestamp) {
-    return add(key, ValueHandle{type, flag, data_offset, data_size}, timestamp);
+Status IndexTableBuilder::add(std::string_view key, EntryType type,
+                              uint32_t file_id, uint64_t offset, uint32_t size,
+                              uint64_t timestamp) {
+    return add(key, ValueHandle{type, file_id, offset, size}, timestamp);
 }
 
 size_t IndexTableBuilder::size_estimate() const {
@@ -109,6 +114,12 @@ Status IndexTableBuilder::emit_block() {
     // length so the reader can fetch exactly this block back.
     std::string_view stored = block;
     if (compressor_.compress != nullptr) {
+        // The summary records the codec id, so an active codec must identify
+        // itself; otherwise a reader cannot tell how the block was stored.
+        if (compressor_.id == 0) {
+            return Status::invalid_argument(
+                "index table builder: compressor id required");
+        }
         if (!compressor_.compress(block.data(), block.size(),
                                   &compressed_block_, compression_level_)) {
             return Status::io_error(std::string_view(

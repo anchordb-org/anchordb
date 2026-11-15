@@ -17,11 +17,10 @@
 #include "anchordb/status.h"
 #include "file/filename.h"
 #include "sstable/data_record.h"
-#include "sstable/empty_iter.h"
-#include "sstable/filter_block.h"
+#include "sstable/filter.h"
 #include "sstable/idx_block_reader.h"
 #include "sstable/idx_block_writer.h"
-#include "sstable/idx_summary.h"
+#include "sstable/summary.h"
 #include <cassert>
 #include <cstring>
 #include <memory>
@@ -119,7 +118,9 @@ struct Table::Rep {
                               stored_buf, &stored);
         if (!s.is_ok()) { return s; }
 
-        if (compressor.uncompress == nullptr) {
+        // A zero compressor id means the block is stored verbatim regardless
+        // of the function pointers the caller supplied.
+        if (compressor.id == 0 || compressor.uncompress == nullptr) {
             // Blocks are stored verbatim as full block_size segments; anything
             // else means the summary and index disagree.
             if (stored.size() != block_size) {
@@ -154,50 +155,51 @@ struct Table::Rep {
         return Status::ok();
     }
 
-    // Reads and validates the data record referenced by `handle`,
-    // cross-checking it against `expected_key` and the handle metadata. Returns
-    // Status::not_found for tombstones, Status::not_supported for blob values.
+    // Reads and validates the inline data record referenced by `handle`,
+    // cross-checking it against `expected_key` and the handle metadata.  Blob
+    // entries are addressed directly by the index (file_id, offset, size) and
+    // live in the vLog, not in data.bin; this data-file reader rejects them.
+    // Returns Status::not_found for tombstones.
     Status read_record(const ValueHandle &handle, std::string_view expected_key,
                        std::string *value, std::string *scratch) const {
         if (value == nullptr || scratch == nullptr) {
             return Status::invalid_argument(
                 "Table::read_record: null argument");
         }
+        if (handle.type == EntryType::Blob) {
+            return Status::not_supported(
+                "vLog value must be read through its index handle");
+        }
         // The index stores the exact layout size of the data record, so the
         // whole record can be fetched with a single I/O and no probing.
-        if (handle.data_size < kDataRecordHeaderSize) {
+        if (handle.size < kDataRecordHeaderSize) {
             return Status::corruption("data record size too small",
-                                      std::to_string(handle.data_size));
+                                      std::to_string(handle.size));
         }
         if (handle.offset >= data_file_size ||
-            handle.data_size > data_file_size - handle.offset) {
+            handle.size > data_file_size - handle.offset) {
             return Status::corruption("data record out of range",
                                       std::to_string(handle.offset));
         }
 
         std::string_view view;
-        Status s = read_exact(data_reader, handle.offset, handle.data_size,
-                              scratch, &view);
+        Status s =
+            read_exact(data_reader, handle.offset, handle.size, scratch, &view);
         if (!s.is_ok()) { return s; }
 
         ParsedDataRecord rec;
-        std::string_view cursor = view;
-        s = decode_data_record(&cursor, &rec);
+        s = decode_data_record(view, &rec);
         if (!s.is_ok()) { return s; }
-        if (!cursor.empty()) {
-            return Status::corruption("trailing bytes after data record");
-        }
         if (rec.key != expected_key) {
             return Status::corruption("data record key mismatch");
         }
-        if (rec.type != handle.type || rec.flag != handle.flag) {
+        // The index handle and the data record carry the same EntryType, so
+        // the two must agree before the record is interpreted.
+        if (rec.type != handle.type) {
             return Status::corruption("index/data record metadata mismatch");
         }
-        if (rec.type == ValueType::deletion) {
+        if (rec.type == EntryType::Tombstone) {
             return Status::not_found("tombstone", std::string(expected_key));
-        }
-        if (rec.flag == ValueFlag::blob) {
-            return Status::not_supported("vLog read not implemented");
         }
         value->assign(rec.value.data(), rec.value.size());
         return Status::ok();
@@ -328,7 +330,7 @@ class TableIterator : public Iterator {
 
   private:
     bool visible(size_t slot) const {
-        return reader_->entry(slot).handle.type != ValueType::deletion;
+        return reader_->entry(slot).handle.type != EntryType::Tombstone;
     }
 
     void invalidate() {
@@ -472,10 +474,10 @@ class TableIterator : public Iterator {
 TableFileSet make_table_file_set(std::string_view db_dir,
                                  uint64_t table_number) {
     TableFileSet set;
-    set.data = TableDataFileName(db_dir, table_number);
-    set.index = TableIndexFileName(db_dir, table_number);
-    set.summary = TableSummaryFileName(db_dir, table_number);
-    set.filter = TableFilterFileName(db_dir, table_number);
+    set.data = table_data_filename(db_dir, table_number);
+    set.index = table_index_filename(db_dir, table_number);
+    set.summary = table_summary_filename(db_dir, table_number);
+    set.filter = table_filter_filename(db_dir, table_number);
     return set;
 }
 
@@ -547,6 +549,24 @@ Status Table::open(const Options &options, const TableFileSet &files,
     if (!rep->summary->valid()) {
         delete rep;
         return Status::corruption("invalid summary index");
+    }
+    // The summary records which codec compressed the index blocks.  Reading a
+    // table with any other codec (or with compression disabled) would silently
+    // misinterpret the stored bytes, so reject it up front.
+    const uint32_t stored_compressor_id = rep->summary->compressor_id();
+    if (stored_compressor_id != rep->compressor.id) {
+        const uint32_t expected_compressor_id = rep->compressor.id;
+        delete rep;
+        return Status::corruption(
+            "compressor id mismatch",
+            std::to_string(stored_compressor_id) +
+                " != " + std::to_string(expected_compressor_id));
+    }
+    if (stored_compressor_id != 0 &&
+        (rep->compressor.uncompress == nullptr ||
+         rep->compressor.get_uncompressed_length == nullptr)) {
+        delete rep;
+        return Status::corruption("compressor unavailable for table");
     }
     // The summary header pins the index-block segment size for this table.
     rep->block_size = rep->summary->block_size();

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "sstable/filter_block.h"
+#include "sstable/filter.h"
 #include "util/coding.h"
 #include <cstring>
 
@@ -24,7 +24,7 @@ FilterBlockBuilder::FilterBlockBuilder(const Filter &filter)
     : filter_(filter),
       enabled_(filter.create_filter != nullptr && filter.name != nullptr) {}
 
-void FilterBlockBuilder::add_key(std::string_view user_key) {
+void FilterBlockBuilder::add(std::string_view user_key) {
     if (!enabled_) { return; }
     // Keys arrive in ascending order, so equal user keys are adjacent; keeping
     // only the first of each run shrinks the filter without affecting queries.

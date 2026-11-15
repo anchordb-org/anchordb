@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include "sstable/idx_block_reader.h"
-#include "sstable/empty_iter.h"
 #include "util/coding.h"
 #include <cassert>
 #include <cstdint>
@@ -59,19 +58,22 @@ IndexBlockReader::IndexBlockReader(std::string_view block, size_t block_size)
     // Validate every entry so callers can decode without bounds checks.
     for (size_t i = 0; i < slot_count_; ++i) {
         const char *slot = data_ + kIndexHeaderSize + i * kIndexSlotSize;
-        const uint32_t key_off = decode_fixed_32(slot);
+        const uint16_t key_off = decode_fixed_16(slot);
 
         // Payloads grow down from the free-space boundary, so every payload
-        // starts at or above it; it must hold at least its 4-byte length
+        // starts at or above it; it must hold at least its 2-byte length
         // prefix and stay inside the segment.
         if (key_off < free_space_boundary ||
-            static_cast<size_t>(key_off) + sizeof(uint32_t) > block_size_) {
+            static_cast<size_t>(key_off) + sizeof(uint16_t) > block_size_) {
             return;
         }
 
-        const uint32_t key_len = decode_fixed_32(data_ + key_off);
+        const uint8_t type = static_cast<uint8_t>(slot[kSlotTypeOff]);
+        if (type > static_cast<uint8_t>(EntryType::Blob)) { return; }
+
+        const uint16_t key_len = decode_fixed_16(data_ + key_off);
         const size_t key_start =
-            static_cast<size_t>(key_off) + sizeof(uint32_t);
+            static_cast<size_t>(key_off) + sizeof(uint16_t);
         if (key_start + key_len + sizeof(uint64_t) > block_size_) { return; }
     }
 
@@ -83,19 +85,18 @@ IndexBlockEntry IndexBlockReader::entry(size_t index) const {
     assert(index < slot_count_);
 
     const char *slot = data_ + kIndexHeaderSize + index * kIndexSlotSize;
-    const uint32_t key_off = decode_fixed_32(slot);
+    const uint16_t key_off = decode_fixed_16(slot);
     const char *payload = data_ + key_off;
-    const uint32_t key_len = decode_fixed_32(payload);
+    const uint16_t key_len = decode_fixed_16(payload);
 
     IndexBlockEntry result;
-    result.key = std::string_view(payload + sizeof(uint32_t), key_len);
+    result.key = std::string_view(payload + sizeof(uint16_t), key_len);
     result.handle.type =
-        static_cast<ValueType>(static_cast<uint8_t>(slot[kSlotTypeOff]));
-    result.handle.flag =
-        static_cast<ValueFlag>(static_cast<uint8_t>(slot[kSlotFlagOff]));
-    result.handle.data_size = decode_fixed_32(slot + kSlotDataSizeOff);
+        static_cast<EntryType>(static_cast<uint8_t>(slot[kSlotTypeOff]));
+    result.handle.file_id = decode_fixed_32(slot + kSlotFileIdOff);
+    result.handle.size = decode_fixed_32(slot + kSlotSizeOff);
     result.handle.offset = decode_fixed_64(slot + kSlotGlobalOffsetOff);
-    result.timestamp = decode_fixed_64(payload + sizeof(uint32_t) + key_len);
+    result.timestamp = decode_fixed_64(payload + sizeof(uint16_t) + key_len);
     return result;
 }
 
@@ -105,14 +106,14 @@ bool IndexBlockReader::decode_value(std::string_view value, ValueHandle *handle,
 
     const char *p = value.data();
     if (handle != nullptr) {
-        handle->type = static_cast<ValueType>(static_cast<uint8_t>(p[0]));
-        handle->flag = static_cast<ValueFlag>(static_cast<uint8_t>(p[1]));
-        handle->data_size = decode_fixed_32(p + 2);
-        handle->offset = decode_fixed_64(p + 2 + sizeof(uint32_t));
+        handle->type = static_cast<EntryType>(static_cast<uint8_t>(p[0]));
+        handle->file_id = decode_fixed_32(p + 1);
+        handle->size = decode_fixed_32(p + 1 + sizeof(uint32_t));
+        handle->offset = decode_fixed_64(p + 1 + 2 * sizeof(uint32_t));
     }
     if (timestamp != nullptr) {
         *timestamp =
-            decode_fixed_64(p + 2 + sizeof(uint32_t) + sizeof(uint64_t));
+            decode_fixed_64(p + 1 + 2 * sizeof(uint32_t) + sizeof(uint64_t));
     }
     return true;
 }
@@ -188,12 +189,12 @@ class IndexBlockIter : public Iterator {
             key_ = current.key;
             value_buf_[0] =
                 static_cast<char>(static_cast<uint8_t>(current.handle.type));
-            value_buf_[1] =
-                static_cast<char>(static_cast<uint8_t>(current.handle.flag));
-            encode_fixed_32(value_buf_ + 2, current.handle.data_size);
-            encode_fixed_64(value_buf_ + 2 + sizeof(uint32_t),
+            encode_fixed_32(value_buf_ + 1, current.handle.file_id);
+            encode_fixed_32(value_buf_ + 1 + sizeof(uint32_t),
+                            current.handle.size);
+            encode_fixed_64(value_buf_ + 1 + 2 * sizeof(uint32_t),
                             current.handle.offset);
-            encode_fixed_64(value_buf_ + 2 + sizeof(uint32_t) +
+            encode_fixed_64(value_buf_ + 1 + 2 * sizeof(uint32_t) +
                                 sizeof(uint64_t),
                             current.timestamp);
             value_ = std::string_view(value_buf_, kIndexValueSize);

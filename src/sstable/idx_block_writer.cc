@@ -23,35 +23,6 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-// Index block layout
-// clang-format off
-/*
-    +--------------------------------------------------------------------------------------------------------+
-    | 64KB ALIGNED SEGMENT BOUNDARY                                                                          |
-    +--------------------------------------------------------------------------------------------------------+
-    | [HEADER (8 Bytes)]                                                                                     |
-    |   - slot_count          (4 Bytes): Total elements in this block                                        |
-    |   - free_space_boundary (4 Bytes): Byte offset marking the boundary where backward payload begins      |
-    +--------------------------------------------------------------------------------------------------------+
-    | [FORWARD FIXED-SIZE SLOTS ARRAY (Grows forward from byte offset 8)]                                    |
-    |   - Slot 0: [key_local_offset (4B) | value_type (1B) | value_flag (1B) | data_size (4B) | data_global_offset (8B)] |
-    |   - Slot 1: [key_local_offset (4B) | value_type (1B) | value_flag (1B) | data_size (4B) | data_global_offset (8B)] |
-    |   - Slot N: Totaling 18 bytes per slot.                                                                |
-    |                                                                                                        |
-    |       Field Metadata Definitions:                                                                      |
-    |         - value_type (1B): [0x1 = Value] | [0x0 = Tombstone]                                           |
-    |         - value_flag (1B): [0x1 = Inline in data.bin] | [0x0 = Pointer to vLog]                        |
-    |         - data_size  (4B): Total encoded layout size of the referenced data record in data.bin         |
-    +--------------------------------------------------------------------------------------------------------+
-    |                                  ... UNUSED BLOCK SPACE ...                                            |
-    +--------------------------------------------------------------------------------------------------------+
-    | [BACKWARD VARIABLE-LENGTH STRINGS PAYLOAD (Grows backward from absolute end of the block)]             |
-    |   - String N: [key_length (4B)] [key_bytes (Variable)] [timestamp (8B: uint64_t)]                      |
-    |   - String 0: Read sequentially using 4-byte key_local_offset pointers from forward slots.             |
-    +--------------------------------------------------------------------------------------------------------+
-*/
-// clang-format on
-
 void IndexBlockWriter::write_header() noexcept {
     encode_fixed_32(buffer_, slot_count_);
     // The boundary is a block-local offset; 32 bits cover every configurable
@@ -81,11 +52,12 @@ bool IndexBlockWriter::add(std::string_view key, ValueHandle handle,
                            uint64_t timestamp) {
     assert(!finished_);
 
-    // The key length is encoded in 32 bits; an oversized entry can never fit a
-    // segment and must be handled by the caller.
+    // Keys are bounded by the effective max_key_size (which is itself capped to
+    // a quarter of the block); a rejected entry can never fit a segment and
+    // must be handled by the caller.
     const size_t payload_size =
-        sizeof(uint32_t) + key.size() + sizeof(uint64_t);
-    if (finished_ || sealed_ || key.size() > UINT32_MAX ||
+        sizeof(uint16_t) + key.size() + sizeof(uint64_t);
+    if (finished_ || sealed_ || key.size() > max_key_size() ||
         payload_size > block_size_) {
         return false;
     }
@@ -105,23 +77,32 @@ bool IndexBlockWriter::add(std::string_view key, ValueHandle handle,
 
     // Payload grows down from the free-space boundary.
     const size_t new_boundary = free_space_boundary_ - payload_size;
+    if (new_boundary > UINT16_MAX) {
+        write_header();
+        sealed_ = true;
+        return false;
+    }
     char *payload = buffer_ + new_boundary;
-    encode_fixed_32(payload, static_cast<uint32_t>(key.size()));
-    payload += sizeof(uint32_t);
+    encode_fixed_16(payload, static_cast<uint16_t>(key.size()));
+    payload += sizeof(uint16_t);
     std::memcpy(payload, key.data(), key.size());
     payload += key.size();
     encode_fixed_64(payload, timestamp);
     free_space_boundary_ = new_boundary;
     last_entry_offset_ = static_cast<int64_t>(new_boundary);
 
+    // Inline and tombstone entries never reference a vLog file.
+    const uint32_t file_id =
+        handle.type == EntryType::Blob ? handle.file_id : 0;
+
     // Fixed-size slot grows up from the header.
     char *slot = buffer_ + forward_end;
-    encode_fixed_32(slot + kSlotKeyOffsetOff,
-                    static_cast<uint32_t>(new_boundary)); // key offset
+    encode_fixed_16(slot + kSlotKeyOffsetOff,
+                    static_cast<uint16_t>(new_boundary)); // key offset
     // Field order matches the documented slot layout.
     slot[kSlotTypeOff] = static_cast<char>(static_cast<uint8_t>(handle.type));
-    slot[kSlotFlagOff] = static_cast<char>(static_cast<uint8_t>(handle.flag));
-    encode_fixed_32(slot + kSlotDataSizeOff, handle.data_size);
+    encode_fixed_32(slot + kSlotFileIdOff, file_id);
+    encode_fixed_32(slot + kSlotSizeOff, handle.size);
     encode_fixed_64(slot + kSlotGlobalOffsetOff, handle.offset);
 
     ++slot_count_;

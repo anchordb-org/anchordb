@@ -99,8 +99,12 @@ target_sources(anchordb
         src/sstable/empty_iter.h
         src/sstable/data_record.h
         src/sstable/data_record.cc
-        src/sstable/record_file_writer.h
-        src/sstable/record_file_writer.cc
+        src/sstable/record_writer.h
+        src/sstable/record_writer.cc
+        src/sstable/record_reader.h
+        src/sstable/record_reader.cc
+        src/sstable/record_buffer_reader.h
+        src/sstable/record_buffer_reader.cc
         src/sstable/iterator_wrapper.h
         src/port/port.h
         src/port/port_thread.h
@@ -112,15 +116,14 @@ target_sources(anchordb
         src/sstable/idx_block_writer.h
         src/sstable/idx_table_builder.cc
         src/sstable/idx_table_builder.h
-        src/sstable/filter_block.cc
-        src/sstable/filter_block.h
-        src/sstable/idx_summary.cc
-        src/sstable/idx_summary.h
+        src/sstable/filter.cc
+        src/sstable/filter.h
+        src/sstable/summary.cc
+        src/sstable/summary.h
         src/sstable/table.cc
         src/sstable/table.h
         src/sstable/table_cache.cc
         src/sstable/table_cache.h
-        src/sstable/iterator_wrapper.h
 )
 
 if (WIN32)

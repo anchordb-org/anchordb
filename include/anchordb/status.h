@@ -15,6 +15,7 @@
 #pragma once
 
 #include <anchordb/export.h>
+#include <concepts>
 #include <string>
 #include <string_view>
 
@@ -80,15 +81,23 @@ class ANCHORDB_EXPORT Status {
         return Status(Code::IoError, msg, msg2);
     }
 
-    // Convenience overloads taking std::string, for callers that already hold
-    // owned strings and do not want a temporary std::string_view.
-    static Status not_found(const std::string &msg,
-                            const std::string &msg2 = "") {
+    // Convenience overloads for callers that already hold owned strings.
+    //
+    // These are constrained templates rather than plain std::string overloads:
+    // a plain overload would make calls with string literals ambiguous, because
+    // a literal converts equally well to std::string and std::string_view.  The
+    // constraints keep the overload viable only when every argument is already
+    // a std::string, so literals and mixed argument lists still select the
+    // string_view overload above.
+    template <typename T1, typename T2 = std::string>
+        requires std::same_as<T1, std::string> && std::same_as<T2, std::string>
+    static Status not_found(const T1 &msg, const T2 &msg2 = std::string()) {
         return Status(Code::NotFound, msg, msg2);
     }
 
-    static Status io_error(const std::string &msg,
-                           const std::string &msg2 = "") {
+    template <typename T1, typename T2 = std::string>
+        requires std::same_as<T1, std::string> && std::same_as<T2, std::string>
+    static Status io_error(const T1 &msg, const T2 &msg2 = std::string()) {
         return Status(Code::IoError, msg, msg2);
     }
 

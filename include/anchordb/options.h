@@ -20,6 +20,7 @@
 #include "anchordb/export.h"
 #include "anchordb/filter.h"
 #include <cstddef>
+#include <cstdint>
 
 #include "anchordb/anchordb_namespace.h"
 
@@ -90,8 +91,20 @@ struct ANCHORDB_EXPORT Options {
 
     // Size at which the active memtable is flushed to an on-disk table.
     size_t write_buffer_size = 4 * 1024 * 1024;
+    // Values strictly larger than this are written to the value log (vLog) and
+    // referenced from the memtable/SSTable by a BlobHandle.  Zero disables the
+    // value log entirely, storing every value inline.
+    size_t value_threshold = 4 * 1024;
+    // Approximate maximum size of a vLog file before the writer rolls to the
+    // next file id.  Zero disables rolling.
+    uint64_t vlog_file_size = 64 * 1024 * 1024;
     // Logical size of an on-disk data block.
     size_t block_size = 4 * 1024;
+    // Maximum accepted user-key length.  Oversized keys are rejected rather
+    // than truncated when index entries are written.  The effective limit is
+    // capped to a quarter of the index block size (which itself is clamped to
+    // [4KB, 64KB]).
+    size_t max_key_size = 4 * 1024;
     // Approximate maximum size of a table file before the table is split.
     size_t max_file_size = 2 * 1024 * 1024;
     // Upper bound on concurrently open file descriptors.

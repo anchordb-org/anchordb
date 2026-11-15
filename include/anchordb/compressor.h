@@ -17,6 +17,7 @@
 #include "anchordb/anchordb_namespace.h"
 #include "anchordb/export.h"
 #include <cstddef>
+#include <cstdint>
 #include <string>
 
 namespace ANCHORDB_NAMESPACE {
@@ -36,6 +37,9 @@ enum class ANCHORDB_EXPORT CompressionType {
 // no inheritance.  A null function pointer means the codec is disabled and
 // blocks are stored uncompressed.
 struct ANCHORDB_EXPORT Compressor {
+    // Unique codec identity / version tag for on-disk validation
+    uint32_t id = 0;
+
     // Compresses `length` bytes at `input` into an existing `*output` string,
     // using `level` as the codec-specific compression level.  Returns false on
     // failure.

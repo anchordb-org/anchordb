@@ -27,18 +27,49 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-// Distinguishes a live key-value entry from a tombstone (deletion marker).
-// Encoded as the low byte of the 8-byte trailer in an internal key.
-enum class ValueType : uint8_t { value = 0x1, deletion = 0x0 };
+// Classifies a stored entry across the memtable, data records, and index
+// blocks.  The numeric values are stable: internal keys encode tombstone and
+// inline_ in their 8-byte trailer, while blob marks a value stored in the vLog.
+enum class EntryType : uint8_t {
+    Tombstone = 0x0,
+    Inline = 0x1,
+    Blob = 0x2,
+};
 
-enum class ValueFlag : uint8_t { inline_ = 0x1, blob = 0x0 };
+// Default upper bound on a stored user key.  Components that accept keys
+// (memtable, index blocks, summary index) enforce this limit, or the effective
+// limit derived from their configuration when it is smaller.
+inline constexpr size_t kDefaultMaxKeySize = 4096; // 4KB
 
 // A monotonically increasing global sequence number assigned to every write.
 using seq_num = uint64_t;
 
 // Maximum sequence number that fits in 56 bits (upper 8 bits are reserved for
-// ValueType).
+// EntryType).
 static const seq_num k_max_seq_num = ((0x1ul << 56) - 1);
+
+// A reference to an encoded record in a WiscKey value-log file.  The memtable
+// stores entries larger than the configured threshold as EntryType::blob and
+// keeps this handle as the entry's value bytes.  `offset` and `size` address
+// the whole encoded record (header included), so a reader can fetch exactly
+// those bytes and decode them with RecordBufferReader.
+struct BlobHandle {
+    uint32_t file_id = 0;
+    uint32_t size = 0;
+    uint64_t offset = 0;
+};
+
+// On-memory encoding of a BlobHandle:
+//   | file_id (4B) | size (4B) | offset (8B) |
+inline constexpr size_t kBlobHandleEncodedSize =
+    sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint64_t);
+
+// Appends the fixed-width encoding of `handle` to *dst.
+void append_blob_handle(std::string *dst, const BlobHandle &handle);
+
+// Decodes a BlobHandle from `encoded`, which must be exactly
+// kBlobHandleEncodedSize bytes.  Returns false on a wrong-sized input.
+bool parse_blob_handle(std::string_view encoded, BlobHandle *handle);
 
 // A fully decomposed internal key.  The on-disk / in-memory internal key format
 // is:
@@ -47,19 +78,20 @@ static const seq_num k_max_seq_num = ((0x1ul << 56) - 1);
 struct ParsedInternalKey {
     std::string_view user_key;
     seq_num sequence;
-    ValueType type;
+    EntryType type;
 
     ParsedInternalKey() {}
-    ParsedInternalKey(const std::string_view u, const seq_num seq, ValueType t)
+    ParsedInternalKey(const std::string_view u, const seq_num seq, EntryType t)
         : user_key(u), sequence(seq), type(t) {}
 };
 
 namespace {
-// Packs a 56-bit sequence number and a 1-byte ValueType into a single uint64_t.
+// Packs a 56-bit sequence number and a 1-byte EntryType into a single uint64_t.
 // Layout: | sequence (56 bits) | type (8 bits) |
-uint64_t pack_seq_and_type(uint64_t seq, ValueType t) {
+uint64_t pack_seq_and_type(uint64_t seq, EntryType t) {
     assert(seq <= k_max_seq_num);
-    assert(t <= ValueType::value);
+    assert(t == EntryType::Tombstone || t == EntryType::Inline ||
+           t == EntryType::Blob);
     return (seq << 8) | static_cast<uint64_t>(t);
 }
 } // namespace
@@ -77,7 +109,7 @@ inline void append_internal_key(std::string *result,
 }
 
 // Decodes an internal key from a std::string_view.  Returns false if the
-// std::string_view is too short or the ValueType byte is invalid.
+// std::string_view is too short or the EntryType byte is invalid.
 bool parse_internal_key(std::string_view internal_key,
                         ParsedInternalKey *result);
 
@@ -96,7 +128,7 @@ class InternalKey {
 
   public:
     InternalKey() {}
-    InternalKey(std::string_view user_key, seq_num s, ValueType t) {
+    InternalKey(std::string_view user_key, seq_num s, EntryType t) {
         append_internal_key(&key_, ParsedInternalKey(user_key, s, t));
     }
 
@@ -133,7 +165,8 @@ class InternalKey {
 class LookUpKey {
   public:
     // Constructs a memtable key for the given user_key and sequence number.
-    // The value type is always ValueType::value (used for point lookups).
+    // The trailer uses the largest EntryType (blob) so the lookup key sorts
+    // before every entry stored at that sequence number.
     LookUpKey(std::string_view user_key, seq_num sequence);
 
     LookUpKey(const LookUpKey &) = delete;
@@ -204,7 +237,7 @@ class InternalKeyComparator {
             // User key has become shorter physically, but larger logically.
             // Tack on the earliest possible number to the shortened user key.
             put_fixed_64(&tmp,
-                         pack_seq_and_type(k_max_seq_num, ValueType::value));
+                         pack_seq_and_type(k_max_seq_num, EntryType::Inline));
             assert(this->compare(*start, tmp) < 0);
             assert(this->compare(tmp, limit) < 0);
             start->swap(tmp);
@@ -219,7 +252,7 @@ class InternalKeyComparator {
             // User key has become shorter physically, but larger logically.
             // Tack on the earliest possible number to the shortened user key.
             put_fixed_64(&tmp,
-                         pack_seq_and_type(k_max_seq_num, ValueType::value));
+                         pack_seq_and_type(k_max_seq_num, EntryType::Inline));
             assert(this->compare(*key, tmp) < 0);
             key->swap(tmp);
         }
@@ -229,29 +262,8 @@ class InternalKeyComparator {
     const Comparator *user_comparator_;
 };
 
-// Value-log pointer stored in an inline data record when ValueFlag::blob is
-// set: the vLog file id and the (offset, size) of the value within it.
-struct BlobHandle {
-    uint64_t offset;
-    uint32_t file_id;
-    uint32_t size;
-
-    BlobHandle() {}
-    BlobHandle(uint64_t offset, uint32_t file_id, uint32_t size)
-        : offset(offset), file_id(file_id), size(size) {}
-};
-
-inline void encode_blob_handle(BlobHandle *handle, std::string *result) {
-    put_varint_64(result, handle->offset);
-    put_varint_32(result, handle->file_id);
-    put_varint_32(result, handle->size);
-}
-
-inline bool parse_blob_handle(std::string_view *blob_handle,
-                              BlobHandle *result) {
-    return get_varint_64(blob_handle, &result->offset) &&
-           get_varint_32(blob_handle, &result->file_id) &&
-           get_varint_32(blob_handle, &result->size);
-}
+// Value-log entries are addressed directly by the index: the index slot stores
+// the vLog file id, the byte offset within that file, and the value size, so no
+// intermediate pointer is written into the data record.
 
 } // namespace ANCHORDB_NAMESPACE

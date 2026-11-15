@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "env/posix.h"
 #include "anchordb/env.h"
 #include "anchordb/status.h"
 #include "env/env_default.h"
+#include "env/posix.h"
 #include "file/random_access_reader.h"
 #include "file/sequential_reader.h"
 #include "file/writer.h"
@@ -157,8 +157,8 @@ Status PosixEnv::new_sequential_file_reader(const std::string &filename,
     if (fd < 0) { return posix_error(filename, errno); }
 
     size_t buf_size =
-        (buffer_size != 0) ? buffer_size : k_seq_file_reader_buf_size;
-    AlignedBuffer buf(buf_size, k_o_direct_alignment);
+        (buffer_size != 0) ? buffer_size : kSeqFileReaderBufSize;
+    AlignedBuffer buf(buf_size, kDirectIOAlignment);
     *result = new PosixSequentialFileReader(filename, fd, ring, &buf, buf_size,
                                             direct_io_);
 
@@ -203,9 +203,8 @@ Status PosixEnv::new_writable_file_writer(const std::string &filename,
     int fd = ::open(filename.c_str(), flags, 0644);
     if (fd < 0) { return posix_error(filename, errno); }
 
-    size_t buf_size =
-        (buffer_size != 0) ? buffer_size : k_writable_file_buf_size;
-    AlignedBuffer buf(buf_size, k_o_direct_alignment);
+    size_t buf_size = (buffer_size != 0) ? buffer_size : kWritableFileBufSize;
+    AlignedBuffer buf(buf_size, kDirectIOAlignment);
     *result = new PosixWritableFileWriter(filename, fd, ring, &buf, direct_io_);
 
     return Status::ok();
@@ -232,9 +231,8 @@ Status PosixEnv::new_appendable_file_writer(const std::string &filename,
     int fd = ::open(filename.c_str(), flags, 0644);
     if (fd < 0) { return posix_error(filename, errno); }
 
-    size_t buf_size =
-        (buffer_size != 0) ? buffer_size : k_writable_file_buf_size;
-    AlignedBuffer buf(buf_size, k_o_direct_alignment);
+    size_t buf_size = (buffer_size != 0) ? buffer_size : kWritableFileBufSize;
+    AlignedBuffer buf(buf_size, kDirectIOAlignment);
 
     uint64_t file_size = 0;
     Status s = get_file_size(filename, &file_size);

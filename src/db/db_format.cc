@@ -24,7 +24,7 @@
 namespace ANCHORDB_NAMESPACE {
 
 // Decodes the trailing 8 bytes of an internal key into sequence number and
-// value type. Layout: | user_key (n-8 bytes) | sequence (7 bytes,
+// entry type. Layout: | user_key (n-8 bytes) | sequence (7 bytes,
 // little-endian) | type (1 byte) |
 bool parse_internal_key(std::string_view internal_key,
                         ParsedInternalKey *result) {
@@ -34,13 +34,31 @@ bool parse_internal_key(std::string_view internal_key,
     uint64_t num = decode_fixed_64(internal_key.data() + n - 8);
     uint8_t c = num & 0xff;
     result->sequence = num >> 8;
-    result->type = static_cast<ValueType>(c);
+    result->type = static_cast<EntryType>(c);
     result->user_key = std::string_view(internal_key.data(), n - 8);
-    return (c <= static_cast<uint8_t>(ValueType::value));
+    return (c <= static_cast<uint8_t>(EntryType::Blob));
+}
+
+void append_blob_handle(std::string *dst, const BlobHandle &handle) {
+    assert(dst != nullptr);
+    put_fixed_32(dst, handle.file_id);
+    put_fixed_32(dst, handle.size);
+    put_fixed_64(dst, handle.offset);
+}
+
+bool parse_blob_handle(std::string_view encoded, BlobHandle *handle) {
+    if (handle == nullptr || encoded.size() != kBlobHandleEncodedSize) {
+        return false;
+    }
+    const char *p = encoded.data();
+    handle->file_id = decode_fixed_32(p);
+    handle->size = decode_fixed_32(p + sizeof(uint32_t));
+    handle->offset = decode_fixed_64(p + 2 * sizeof(uint32_t));
+    return true;
 }
 
 // Constructs a memtable lookup key.  The wire format is:
-//   | varint32(internal_key_size) | user_key | packed(seq, TypeValue) |
+//   | varint32(internal_key_size) | user_key | packed(seq, EntryType) |
 // The varint32 length prefix is required by the memtable's internal encoding.
 LookUpKey::LookUpKey(std::string_view user_key, seq_num seq) {
     size_t usize = user_key.size();
@@ -55,7 +73,9 @@ LookUpKey::LookUpKey(std::string_view user_key, seq_num seq) {
     kstart_ = dst;
     std::memcpy(dst, user_key.data(), usize);
     dst += usize;
-    encode_fixed_64(dst, pack_seq_and_type(seq, ValueType::value));
+    // Use the largest EntryType so the lookup key sorts before every entry
+    // stored at `seq`, regardless of that entry's actual type.
+    encode_fixed_64(dst, pack_seq_and_type(seq, EntryType::Blob));
     dst += 8;
     end_ = dst;
 }

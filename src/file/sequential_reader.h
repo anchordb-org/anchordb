@@ -38,8 +38,8 @@ class PosixSequentialFileReader final : public SequentialFileReader {
             buf_ = std::move(*buf);
         } else if (direct_io_) {
             size_t buf_size =
-                (buffer_size != 0) ? buffer_size : k_seq_file_reader_buf_size;
-            buf_ = AlignedBuffer(buf_size, k_o_direct_alignment);
+                (buffer_size != 0) ? buffer_size : kSeqFileReaderBufSize;
+            buf_ = AlignedBuffer(buf_size, kDirectIOAlignment);
         }
     }
 

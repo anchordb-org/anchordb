@@ -25,10 +25,9 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-constexpr const size_t k_writable_file_buf_size = 65536;           // 64KB
-constexpr const size_t k_seq_file_reader_buf_size = 4194304;       // 4MB
-constexpr const size_t k_seq_blob_file_reader_buf_size = 67108864; // 64MB
-constexpr const size_t k_o_direct_alignment = 4096;
+constexpr const size_t kWritableFileBufSize = 65536;    // 64KB
+constexpr const size_t kSeqFileReaderBufSize = 4194304; // 4MB
+constexpr const size_t kDirectIOAlignment = 4096;
 
 inline Status posix_error(const std::string &context, int error_number) {
     if (error_number == ENOENT) {

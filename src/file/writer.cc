@@ -68,7 +68,7 @@ Status PosixWritableFileWriter::submit_write_(const char *src, size_t len,
 
         total_written += static_cast<size_t>(res);
 
-        if (direct_io_ && (res % k_o_direct_alignment != 0) &&
+        if (direct_io_ && (res % kDirectIOAlignment != 0) &&
             (total_written < len)) {
             return posix_error(filename_, EINVAL);
         }
@@ -85,9 +85,9 @@ Status PosixWritableFileWriter::append(std::string_view data) {
     while (left > 0) {
         if (direct_io_ && buf_.current_size() == 0) {
             bool is_src_aligned =
-                (reinterpret_cast<uintptr_t>(src) % k_o_direct_alignment == 0);
-            bool is_offset_aligned = (filesize_ % k_o_direct_alignment == 0);
-            bool is_len_aligned = (left % k_o_direct_alignment == 0);
+                (reinterpret_cast<uintptr_t>(src) % kDirectIOAlignment == 0);
+            bool is_offset_aligned = (filesize_ % kDirectIOAlignment == 0);
+            bool is_len_aligned = (left % kDirectIOAlignment == 0);
 
             if (is_src_aligned && is_offset_aligned && is_len_aligned) {
                 Status s = submit_write_(src, left, filesize_);
@@ -165,14 +165,14 @@ Status PosixWritableFileWriter::flush_buffer() {
     size_t write_len = logical_bytes;
     AlignedBuffer lead_block;
 
-    if ((buf_offset_ % k_o_direct_alignment) != 0) {
+    if ((buf_offset_ % kDirectIOAlignment) != 0) {
         const uint64_t aligned_start =
-            buf_offset_ & ~(static_cast<uint64_t>(k_o_direct_alignment) - 1);
+            buf_offset_ & ~(static_cast<uint64_t>(kDirectIOAlignment) - 1);
         const size_t leading = static_cast<size_t>(buf_offset_ - aligned_start);
         const size_t total =
-            round_up(leading + logical_bytes, k_o_direct_alignment);
+            round_up(leading + logical_bytes, kDirectIOAlignment);
 
-        lead_block = AlignedBuffer(total, k_o_direct_alignment);
+        lead_block = AlignedBuffer(total, kDirectIOAlignment);
         if (!lead_block.is_allocated()) {
             return Status::io_error(std::string_view(
                 "Failed to allocate aligned buffer for O_DIRECT write"));
@@ -195,7 +195,7 @@ Status PosixWritableFileWriter::flush_buffer() {
         write_offset = aligned_start;
         write_len = total;
     } else {
-        const size_t padded = round_up(logical_bytes, k_o_direct_alignment);
+        const size_t padded = round_up(logical_bytes, kDirectIOAlignment);
         std::memset(buf_.data() + logical_bytes, 0, padded - logical_bytes);
         Status s = submit_write_(buf_.data(), padded, buf_offset_);
         if (!s.is_ok()) return s;
@@ -214,7 +214,7 @@ Status PosixWritableFileWriter::flush_buffer() {
     // Retain the sub-block tail that belongs to the last (padded) block so the
     // next flush can rewrite it at an aligned offset. This keeps the logical
     // byte stream contiguous while never issuing an unaligned O_DIRECT write.
-    const size_t tail = static_cast<size_t>(filesize_ % k_o_direct_alignment);
+    const size_t tail = static_cast<size_t>(filesize_ % kDirectIOAlignment);
     if (tail != 0) {
         std::memmove(buf_.data(), written + (logical_bytes - tail), tail);
         buf_.size(tail);

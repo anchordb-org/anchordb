@@ -73,7 +73,7 @@ Status PosixSequentialFileReader::submit_read_(void *dst, size_t len,
 
         total_read += static_cast<size_t>(res);
 
-        if (direct_io_ && (res % k_o_direct_alignment != 0)) { break; }
+        if (direct_io_ && (res % kDirectIOAlignment != 0)) { break; }
     }
 
     *bytes_read = total_read;
@@ -130,14 +130,14 @@ Status PosixSequentialFileReader::read(size_t n, std::string_view *result,
         size_t remaining_req = n - total_copied;
         bool is_dst_aligned =
             (reinterpret_cast<uintptr_t>(scratch + total_copied) %
-                 k_o_direct_alignment ==
+                 kDirectIOAlignment ==
              0);
-        bool is_offset_aligned = (offset_ % k_o_direct_alignment == 0);
+        bool is_offset_aligned = (offset_ % kDirectIOAlignment == 0);
 
         if (remaining_req >= buf_.capacity() && is_dst_aligned &&
             is_offset_aligned) {
             size_t aligned_len =
-                remaining_req & ~static_cast<size_t>(k_o_direct_alignment - 1);
+                remaining_req & ~static_cast<size_t>(kDirectIOAlignment - 1);
             size_t bytes_read = 0;
 
             Status s = submit_read_(scratch + total_copied, aligned_len,
@@ -154,7 +154,7 @@ Status PosixSequentialFileReader::read(size_t n, std::string_view *result,
         }
 
         uint64_t aligned_offset =
-            offset_ & ~static_cast<uint64_t>(k_o_direct_alignment - 1);
+            offset_ & ~static_cast<uint64_t>(kDirectIOAlignment - 1);
         size_t bytes_read = 0;
 
         Status s = submit_read_(buf_.data(), buf_.capacity(), aligned_offset,

@@ -98,7 +98,7 @@ Status PosixRandomAccessFileReader::submit_read_(int fd, void *buf, size_t n,
 
             total_read += static_cast<size_t>(res);
 
-            if (direct_io_ && (res % k_o_direct_alignment != 0)) {
+            if (direct_io_ && (res % kDirectIOAlignment != 0)) {
                 // Short read under O_DIRECT; stop here
                 *bytes_read = total_read;
                 return Status::ok();
@@ -145,21 +145,21 @@ Status PosixRandomAccessFileReader::read(uint64_t offset, size_t n,
 
     if (direct_io_) {
         bool is_scratch_aligned =
-            (reinterpret_cast<uintptr_t>(scratch) % k_o_direct_alignment == 0);
-        bool is_offset_aligned = (offset % k_o_direct_alignment == 0);
-        bool is_len_aligned = (n % k_o_direct_alignment == 0);
+            (reinterpret_cast<uintptr_t>(scratch) % kDirectIOAlignment == 0);
+        bool is_offset_aligned = (offset % kDirectIOAlignment == 0);
+        bool is_len_aligned = (n % kDirectIOAlignment == 0);
 
         if (is_scratch_aligned && is_offset_aligned && is_len_aligned) {
             target_buf = scratch;
         } else {
             read_offset =
-                offset & ~(static_cast<uint64_t>(k_o_direct_alignment) - 1);
+                offset & ~(static_cast<uint64_t>(kDirectIOAlignment) - 1);
             uint64_t end_offset =
-                ((offset + n) + k_o_direct_alignment - 1) &
-                ~(static_cast<uint64_t>(k_o_direct_alignment) - 1);
+                ((offset + n) + kDirectIOAlignment - 1) &
+                ~(static_cast<uint64_t>(kDirectIOAlignment) - 1);
             read_bytes = static_cast<size_t>(end_offset - read_offset);
 
-            aligned_buf = AlignedBuffer(read_bytes, k_o_direct_alignment);
+            aligned_buf = AlignedBuffer(read_bytes, kDirectIOAlignment);
             if (!aligned_buf.is_allocated()) {
                 return Status::io_error(std::string_view(
                     "Failed to allocate sector-aligned buffer for O_DIRECT"));

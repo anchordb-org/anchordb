@@ -41,30 +41,31 @@ enum class FileType : uint8_t {
 // Builds "<dbname>/<number zero-padded to 6><suffix>".  `dbname` may be empty,
 // in which case no directory prefix is written.  `suffix` is appended verbatim,
 // so it should include a leading '.' for ".log"-style names.
-std::string MakeFileName(std::string_view dbname, uint64_t number,
+std::string make_filename(std::string_view dbname, uint64_t number,
                          std::string_view suffix);
 
 // Numbered file builders.
-std::string LogFileName(std::string_view dbname, uint64_t number);
-std::string TableDataFileName(std::string_view dbname, uint64_t number);
-std::string TableIndexFileName(std::string_view dbname, uint64_t number);
-std::string TableSummaryFileName(std::string_view dbname, uint64_t number);
-std::string TableFilterFileName(std::string_view dbname, uint64_t number);
-std::string VLogFileName(std::string_view dbname, uint64_t number);
-std::string DescriptorFileName(std::string_view dbname, uint64_t number);
-std::string TempFileName(std::string_view dbname, uint64_t number);
+std::string log_filename(std::string_view dbname, uint64_t number);
+std::string table_data_filename(std::string_view dbname, uint64_t number);
+std::string table_index_filename(std::string_view dbname, uint64_t number);
+std::string table_summary_filename(std::string_view dbname, uint64_t number);
+std::string table_filter_filename(std::string_view dbname, uint64_t number);
+std::string vlog_filename(std::string_view dbname, uint64_t number);
+std::string descriptor_filename(std::string_view dbname, uint64_t number);
+std::string temp_filename(std::string_view dbname, uint64_t number);
 
 // Singleton (fixed-name) file builders.
-std::string CurrentFileName(std::string_view dbname);
-std::string LockFileName(std::string_view dbname);
-std::string InfoLogFileName(std::string_view dbname);
+std::string current_filename(std::string_view dbname);
+std::string lock_filename(std::string_view dbname);
+std::string infolog_filename(std::string_view dbname);
 
 // Dispatches to the builder for `type`.  Numbered types use `number`; singleton
 // types ignore it.  Returns an empty string for an unrecognized type.
-std::string FileName(std::string_view dbname, uint64_t number, FileType type);
+std::string filename(std::string_view dbname, uint64_t number, FileType type);
 
 // Recovers the (number, type) encoded in a generated file name, ignoring any
 // leading directory.  Returns false if the name matches no known pattern.
-bool ParseFileName(std::string_view filename, uint64_t *number, FileType *type);
+bool parse_filename(std::string_view filename, uint64_t *number,
+                    FileType *type);
 
 } // namespace ANCHORDB_NAMESPACE

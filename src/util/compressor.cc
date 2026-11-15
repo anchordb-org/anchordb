@@ -27,8 +27,6 @@ namespace ANCHORDB_NAMESPACE {
 namespace {
 
 #if HAS_ZSTD
-// Returns the uncompressed size of the Zstd frame in [input, input + length).
-// Returns false if the frame is invalid or does not record its content size.
 bool zstd_get_uncompressed_length(const char *input, size_t length,
                                   size_t *result) {
     unsigned long long size = ZSTD_getFrameContentSize(input, length);
@@ -86,15 +84,16 @@ bool zstd_compress(const char *input, size_t length, std::string *output,
     size_t outlen = ZSTD_compressBound(length);
     output->resize(outlen);
 
-    ZSTD_CCtx *ctx = ZSTD_createCCtx();
+    // Thread-local Zstd compression context (reused across calls on this
+    // thread)
+    thread_local ZSTD_CCtx *ctx = ZSTD_createCCtx();
     if (ctx == nullptr) { return false; }
+
     if (ZSTD_isError(
             ZSTD_CCtx_setParameter(ctx, ZSTD_c_compressionLevel, level))) {
-        ZSTD_freeCCtx(ctx);
         return false;
     }
     outlen = ZSTD_compress2(ctx, &(*output)[0], output->size(), input, length);
-    ZSTD_freeCCtx(ctx);
     if (ZSTD_isError(outlen)) { return false; }
     output->resize(outlen);
     return true;
@@ -112,10 +111,12 @@ bool zstd_uncompress(const char *input, size_t length, char *output) {
     size_t outlen = 0;
     if (!zstd_get_uncompressed_length(input, length, &outlen)) { return false; }
 
-    ZSTD_DCtx *ctx = ZSTD_createDCtx();
+    // Thread-local Zstd decompression context (reused across calls on this
+    // thread)
+    thread_local ZSTD_DCtx *ctx = ZSTD_createDCtx();
     if (ctx == nullptr) { return false; }
+
     size_t result = ZSTD_decompressDCtx(ctx, output, outlen, input, length);
-    ZSTD_freeDCtx(ctx);
     if (ZSTD_isError(result)) { return false; }
     return true;
 #else
@@ -139,19 +140,18 @@ bool get_zstd_uncompressed_length(const char *input, size_t length,
 }
 
 #if HAS_LZ4
-// Returns the uncompressed size recorded in the LZ4 frame header in
-// [input, input + length). Returns false if the frame is invalid or does not
-// record its content size.
 bool lz4_get_uncompressed_length(const char *input, size_t length,
                                  size_t *result) {
-    LZ4F_dctx *ctx = nullptr;
-    if (LZ4F_isError(LZ4F_createDecompressionContext(&ctx, LZ4F_VERSION))) {
-        return false;
+    thread_local LZ4F_dctx *ctx = nullptr;
+    if (ctx == nullptr) {
+        if (LZ4F_isError(LZ4F_createDecompressionContext(&ctx, LZ4F_VERSION))) {
+            return false;
+        }
     }
     LZ4F_frameInfo_t info = LZ4F_INIT_FRAMEINFO;
     size_t src_size = length;
+    LZ4F_resetDecompressionContext(ctx);
     size_t ret = LZ4F_getFrameInfo(ctx, &info, input, &src_size);
-    LZ4F_freeDecompressionContext(ctx);
     if (LZ4F_isError(ret) || info.contentSize == 0) { return false; }
     *result = static_cast<size_t>(info.contentSize);
     return true;
@@ -186,15 +186,17 @@ bool lz4_uncompress(const char *input, size_t length, char *output) {
     size_t outlen = 0;
     if (!lz4_get_uncompressed_length(input, length, &outlen)) { return false; }
 
-    LZ4F_dctx *ctx = nullptr;
-    if (LZ4F_isError(LZ4F_createDecompressionContext(&ctx, LZ4F_VERSION))) {
-        return false;
+    thread_local LZ4F_dctx *ctx = nullptr;
+    if (ctx == nullptr) {
+        if (LZ4F_isError(LZ4F_createDecompressionContext(&ctx, LZ4F_VERSION))) {
+            return false;
+        }
     }
     size_t dst_size = outlen;
     size_t src_size = length;
+    LZ4F_resetDecompressionContext(ctx);
     size_t ret =
         LZ4F_decompress(ctx, output, &dst_size, input, &src_size, nullptr);
-    LZ4F_freeDecompressionContext(ctx);
     if (LZ4F_isError(ret) || ret != 0) { return false; }
     return true;
 #else
@@ -205,8 +207,6 @@ bool lz4_uncompress(const char *input, size_t length, char *output) {
 #endif
 }
 
-// The uncompressed size is not part of the zlib stream, so it is stored as a
-// 4-byte little-endian prefix in front of the compressed data.
 bool zlib_get_uncompressed_length(const char *input, size_t length,
                                   size_t *result) {
 #if HAS_ZLIB
@@ -265,24 +265,42 @@ bool zlib_uncompress(const char *input, size_t length, char *output) {
 
 } // namespace
 
+// A codec compiled out of the build must look completely disabled, including a
+// zero id, so a table written by it records "uncompressed" and stays readable.
 Compressor new_snappy_compressor() {
-    return Compressor{&snappy_compress, &snappy_uncompress,
+#if HAS_SNAPPY
+    return Compressor{0x1001, &snappy_compress, &snappy_uncompress,
                       &get_snappy_uncompressed_length};
+#else
+    return Compressor{};
+#endif
 }
 
 Compressor new_zstd_compressor() {
-    return Compressor{&zstd_compress, &zstd_uncompress,
+#if HAS_ZSTD
+    return Compressor{0x2001, &zstd_compress, &zstd_uncompress,
                       &get_zstd_uncompressed_length};
+#else
+    return Compressor{};
+#endif
 }
 
 Compressor new_lz4_compressor() {
-    return Compressor{&lz4_compress, &lz4_uncompress,
+#if HAS_LZ4
+    return Compressor{0x3001, &lz4_compress, &lz4_uncompress,
                       &lz4_get_uncompressed_length};
+#else
+    return Compressor{};
+#endif
 }
 
 Compressor new_zlib_compressor() {
-    return Compressor{&zlib_compress, &zlib_uncompress,
+#if HAS_ZLIB
+    return Compressor{0x4001, &zlib_compress, &zlib_uncompress,
                       &zlib_get_uncompressed_length};
+#else
+    return Compressor{};
+#endif
 }
 
 Compressor new_compressor(CompressionType type) {
@@ -292,7 +310,7 @@ Compressor new_compressor(CompressionType type) {
     case CompressionType::Lz4: return new_lz4_compressor();
     case CompressionType::Zlib: return new_zlib_compressor();
     case CompressionType::None:
-    default: return Compressor{};
+    default: return Compressor{0x0, nullptr, nullptr, nullptr};
     }
 }
 

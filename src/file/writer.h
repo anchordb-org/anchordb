@@ -37,8 +37,7 @@ class PosixWritableFileWriter final : public WritableFileWriter {
         if (buf != nullptr) {
             buf_ = std::move(*buf);
         } else {
-            buf_ =
-                AlignedBuffer(k_writable_file_buf_size, k_o_direct_alignment);
+            buf_ = AlignedBuffer(kWritableFileBufSize, kDirectIOAlignment);
         }
     }
 

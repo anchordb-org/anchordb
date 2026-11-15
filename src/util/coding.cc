@@ -14,77 +14,114 @@
 
 #include "coding.h"
 #include <cstdint>
+#include <cstring>
 
 #include "anchordb/anchordb_namespace.h"
 
 namespace ANCHORDB_NAMESPACE {
 
+inline uint32_t unaligned_load_32(const char *p) {
+    uint32_t result;
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+    std::memcpy(&result, p, sizeof(result));
+#else
+    const uint8_t *ptr = reinterpret_cast<const uint8_t *>(p);
+    result = static_cast<uint32_t>(ptr[0]) |
+             (static_cast<uint32_t>(ptr[1]) << 8) |
+             (static_cast<uint32_t>(ptr[2]) << 16) |
+             (static_cast<uint32_t>(ptr[3]) << 24);
+#endif
+    return result;
+}
+
+inline uint64_t unaligned_load_64(const char *p) {
+    uint64_t result;
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+    std::memcpy(&result, p, sizeof(result));
+#else
+    const uint8_t *ptr = reinterpret_cast<const uint8_t *>(p);
+    result = static_cast<uint64_t>(ptr[0]) |
+             (static_cast<uint64_t>(ptr[1]) << 8) |
+             (static_cast<uint64_t>(ptr[2]) << 16) |
+             (static_cast<uint64_t>(ptr[3]) << 24) |
+             (static_cast<uint64_t>(ptr[4]) << 32) |
+             (static_cast<uint64_t>(ptr[5]) << 40) |
+             (static_cast<uint64_t>(ptr[6]) << 48) |
+             (static_cast<uint64_t>(ptr[7]) << 56);
+#endif
+    return result;
+}
+
+inline void unaligned_store_32(char *p, uint32_t v) {
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+    std::memcpy(p, &v, sizeof(v));
+#else
+    uint8_t *ptr = reinterpret_cast<uint8_t *>(p);
+    ptr[0] = static_cast<uint8_t>(v);
+    ptr[1] = static_cast<uint8_t>(v >> 8);
+    ptr[2] = static_cast<uint8_t>(v >> 16);
+    ptr[3] = static_cast<uint8_t>(v >> 24);
+#endif
+}
+
+inline void unaligned_store_64(char *p, uint64_t v) {
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+    std::memcpy(p, &v, sizeof(v));
+#else
+    uint8_t *ptr = reinterpret_cast<uint8_t *>(p);
+    ptr[0] = static_cast<uint8_t>(v);
+    ptr[1] = static_cast<uint8_t>(v >> 8);
+    ptr[2] = static_cast<uint8_t>(v >> 16);
+    ptr[3] = static_cast<uint8_t>(v >> 24);
+    ptr[4] = static_cast<uint8_t>(v >> 32);
+    ptr[5] = static_cast<uint8_t>(v >> 40);
+    ptr[6] = static_cast<uint8_t>(v >> 48);
+    ptr[7] = static_cast<uint8_t>(v >> 56);
+#endif
+}
+
 // Encodes a 16-bit unsigned integer in little-endian byte order.
 // Writes exactly 2 bytes to dst.
 void encode_fixed_16(char *dst, uint16_t value) {
-    uint8_t *buffer = reinterpret_cast<uint8_t *>(dst);
-
-    buffer[0] = static_cast<uint8_t>(value);
-    buffer[1] = static_cast<uint8_t>(value >> 8);
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+    std::memcpy(dst, &value, sizeof(value));
+#else
+    uint8_t *ptr = reinterpret_cast<uint8_t *>(dst);
+    ptr[0] = static_cast<uint8_t>(value);
+    ptr[1] = static_cast<uint8_t>(value >> 8);
+#endif
 }
 
 // Encodes a 32-bit unsigned integer in little-endian byte order.
 // Writes exactly 4 bytes to dst.
 void encode_fixed_32(char *dst, uint32_t value) {
-    uint8_t *buffer = reinterpret_cast<uint8_t *>(dst);
-
-    buffer[0] = static_cast<uint8_t>(value);
-    buffer[1] = static_cast<uint8_t>(value >> 8);
-    buffer[2] = static_cast<uint8_t>(value >> 16);
-    buffer[3] = static_cast<uint8_t>(value >> 24);
+    unaligned_store_32(dst, value);
 }
 
 // Encodes a 64-bit unsigned integer in little-endian byte order.
 // Writes exactly 8 bytes to dst.
 void encode_fixed_64(char *dst, uint64_t value) {
-    uint8_t *buffer = reinterpret_cast<uint8_t *>(dst);
-
-    buffer[0] = static_cast<uint8_t>(value);
-    buffer[1] = static_cast<uint8_t>(value >> 8);
-    buffer[2] = static_cast<uint8_t>(value >> 16);
-    buffer[3] = static_cast<uint8_t>(value >> 24);
-    buffer[4] = static_cast<uint8_t>(value >> 32);
-    buffer[5] = static_cast<uint8_t>(value >> 40);
-    buffer[6] = static_cast<uint8_t>(value >> 48);
-    buffer[7] = static_cast<uint8_t>(value >> 56);
+    unaligned_store_64(dst, value);
 }
 
 // Decodes a 16-bit unsigned integer from a little-endian byte sequence.
-uint16_t decode_fixed_16(const char *ptr) {
-    const uint8_t *buffer = reinterpret_cast<const uint8_t *>(ptr);
-
-    return (static_cast<uint16_t>(buffer[0])) |
-           (static_cast<uint16_t>(buffer[1]) << 8);
+uint16_t decode_fixed_16(const char *src) {
+    uint16_t result;
+#if defined(__BYTE_ORDER__) && (__BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
+    std::memcpy(&result, src, sizeof(result));
+#else
+    const uint8_t *ptr = reinterpret_cast<const uint8_t *>(src);
+    result =
+        static_cast<uint16_t>(ptr[0]) | (static_cast<uint16_t>(ptr[1]) << 8);
+#endif
+    return result;
 }
 
 // Decodes a 32-bit unsigned integer from a little-endian byte sequence.
-uint32_t decode_fixed_32(const char *ptr) {
-    const uint8_t *buffer = reinterpret_cast<const uint8_t *>(ptr);
-
-    return (static_cast<uint32_t>(buffer[0])) |
-           (static_cast<uint32_t>(buffer[1]) << 8) |
-           (static_cast<uint32_t>(buffer[2]) << 16) |
-           (static_cast<uint32_t>(buffer[3]) << 24);
-}
+uint32_t decode_fixed_32(const char *src) { return unaligned_load_32(src); }
 
 // Decodes a 64-bit unsigned integer from a little-endian byte sequence.
-uint64_t decode_fixed_64(const char *ptr) {
-    const uint8_t *buffer = reinterpret_cast<const uint8_t *>(ptr);
-
-    return (static_cast<uint64_t>(buffer[0])) |
-           (static_cast<uint64_t>(buffer[1]) << 8) |
-           (static_cast<uint64_t>(buffer[2]) << 16) |
-           (static_cast<uint64_t>(buffer[3]) << 24) |
-           (static_cast<uint64_t>(buffer[4]) << 32) |
-           (static_cast<uint64_t>(buffer[5]) << 40) |
-           (static_cast<uint64_t>(buffer[6]) << 48) |
-           (static_cast<uint64_t>(buffer[7]) << 56);
-}
+uint64_t decode_fixed_64(const char *src) { return unaligned_load_64(src); }
 
 // Appends a 4-byte little-endian encoding of value to *dst.
 void put_fixed_32(std::string *dst, uint32_t value) {

@@ -22,7 +22,7 @@ namespace ANCHORDB_NAMESPACE {
 namespace {
 
 // Appends "/name" to `dbname`, or just `name` when `dbname` is empty.
-std::string JoinPath(std::string_view dbname, std::string_view name) {
+std::string join_path(std::string_view dbname, std::string_view name) {
     std::string result;
     result.reserve(dbname.size() + name.size() + 1);
     if (!dbname.empty()) {
@@ -36,7 +36,7 @@ std::string JoinPath(std::string_view dbname, std::string_view name) {
 // Consumes a run of decimal digits from the front of *input, storing the value
 // in *number.  Returns false if there is no leading digit or the value
 // overflows.
-bool ConsumeDecimalNumber(std::string_view *input, uint64_t *number) {
+bool consume_decimal_number(std::string_view *input, uint64_t *number) {
     uint64_t value = 0;
     size_t consumed = 0;
     for (char c : *input) {
@@ -54,84 +54,85 @@ bool ConsumeDecimalNumber(std::string_view *input, uint64_t *number) {
 
 } // namespace
 
-std::string MakeFileName(std::string_view dbname, uint64_t number,
-                         std::string_view suffix) {
+std::string make_filename(std::string_view dbname, uint64_t number,
+                          std::string_view suffix) {
     char buf[32];
     const int len = std::snprintf(buf, sizeof(buf), "%06llu",
                                   static_cast<unsigned long long>(number));
     std::string name(buf, static_cast<size_t>(len));
     name.append(suffix.data(), suffix.size());
-    return JoinPath(dbname, name);
+    return join_path(dbname, name);
 }
 
-std::string LogFileName(std::string_view dbname, uint64_t number) {
-    return MakeFileName(dbname, number, ".log");
+std::string log_filename(std::string_view dbname, uint64_t number) {
+    return make_filename(dbname, number, ".log");
 }
 
-std::string TableDataFileName(std::string_view dbname, uint64_t number) {
-    return MakeFileName(dbname, number, ".data");
+std::string table_data_filename(std::string_view dbname, uint64_t number) {
+    return make_filename(dbname, number, ".data");
 }
 
-std::string TableIndexFileName(std::string_view dbname, uint64_t number) {
-    return MakeFileName(dbname, number, ".index");
+std::string table_index_filename(std::string_view dbname, uint64_t number) {
+    return make_filename(dbname, number, ".index");
 }
 
-std::string TableSummaryFileName(std::string_view dbname, uint64_t number) {
-    return MakeFileName(dbname, number, ".summary");
+std::string table_summary_filename(std::string_view dbname, uint64_t number) {
+    return make_filename(dbname, number, ".summary");
 }
 
-std::string TableFilterFileName(std::string_view dbname, uint64_t number) {
-    return MakeFileName(dbname, number, ".filter");
+std::string table_filter_filename(std::string_view dbname, uint64_t number) {
+    return make_filename(dbname, number, ".filter");
 }
 
-std::string VLogFileName(std::string_view dbname, uint64_t number) {
-    return MakeFileName(dbname, number, ".vlog");
+std::string vlog_filename(std::string_view dbname, uint64_t number) {
+    return make_filename(dbname, number, ".vlog");
 }
 
-std::string DescriptorFileName(std::string_view dbname, uint64_t number) {
+std::string descriptor_filename(std::string_view dbname, uint64_t number) {
     char buf[32];
     const int len = std::snprintf(buf, sizeof(buf), "MANIFEST-%06llu",
                                   static_cast<unsigned long long>(number));
     std::string name(buf, static_cast<size_t>(len));
-    return JoinPath(dbname, name);
+    return join_path(dbname, name);
 }
 
-std::string TempFileName(std::string_view dbname, uint64_t number) {
-    return MakeFileName(dbname, number, ".dbtmp");
+std::string temp_filename(std::string_view dbname, uint64_t number) {
+    return make_filename(dbname, number, ".dbtmp");
 }
 
-std::string CurrentFileName(std::string_view dbname) {
-    return JoinPath(dbname, "CURRENT");
+std::string current_filename(std::string_view dbname) {
+    return join_path(dbname, "CURRENT");
 }
 
-std::string LockFileName(std::string_view dbname) {
-    return JoinPath(dbname, "LOCK");
+std::string lock_filename(std::string_view dbname) {
+    return join_path(dbname, "LOCK");
 }
 
-std::string InfoLogFileName(std::string_view dbname) {
-    return JoinPath(dbname, "LOG");
+std::string infolog_filename(std::string_view dbname) {
+    return join_path(dbname, "LOG");
 }
 
-std::string FileName(std::string_view dbname, uint64_t number, FileType type) {
+std::string filename(std::string_view dbname, uint64_t number, FileType type) {
     switch (type) {
-    case FileType::kLogFile: return LogFileName(dbname, number);
-    case FileType::kTableDataFile: return TableDataFileName(dbname, number);
-    case FileType::kTableIndexFile: return TableIndexFileName(dbname, number);
+    case FileType::kLogFile: return log_filename(dbname, number);
+    case FileType::kTableDataFile: return table_data_filename(dbname, number);
+    case FileType::kTableIndexFile: return table_index_filename(dbname, number);
     case FileType::kTableSummaryFile:
-        return TableSummaryFileName(dbname, number);
-    case FileType::kTableFilterFile: return TableFilterFileName(dbname, number);
-    case FileType::kVLogFile: return VLogFileName(dbname, number);
-    case FileType::kDescriptorFile: return DescriptorFileName(dbname, number);
-    case FileType::kTempFile: return TempFileName(dbname, number);
-    case FileType::kCurrentFile: return CurrentFileName(dbname);
-    case FileType::kLockFile: return LockFileName(dbname);
-    case FileType::kInfoLogFile: return InfoLogFileName(dbname);
+        return table_summary_filename(dbname, number);
+    case FileType::kTableFilterFile:
+        return table_filter_filename(dbname, number);
+    case FileType::kVLogFile: return vlog_filename(dbname, number);
+    case FileType::kDescriptorFile: return descriptor_filename(dbname, number);
+    case FileType::kTempFile: return temp_filename(dbname, number);
+    case FileType::kCurrentFile: return current_filename(dbname);
+    case FileType::kLockFile: return lock_filename(dbname);
+    case FileType::kInfoLogFile: return infolog_filename(dbname);
     }
     return std::string();
 }
 
-bool ParseFileName(std::string_view filename, uint64_t *number,
-                   FileType *type) {
+bool parse_filename(std::string_view filename, uint64_t *number,
+                    FileType *type) {
     if (number == nullptr || type == nullptr) { return false; }
 
     const size_t slash = filename.find_last_of('/');
@@ -158,7 +159,7 @@ bool ParseFileName(std::string_view filename, uint64_t *number,
     if (rest.starts_with("MANIFEST-")) {
         rest.remove_prefix(9);
         uint64_t num = 0;
-        if (!ConsumeDecimalNumber(&rest, &num) || !rest.empty()) {
+        if (!consume_decimal_number(&rest, &num) || !rest.empty()) {
             return false;
         }
         *number = num;
@@ -167,7 +168,7 @@ bool ParseFileName(std::string_view filename, uint64_t *number,
     }
 
     uint64_t num = 0;
-    if (!ConsumeDecimalNumber(&rest, &num)) { return false; }
+    if (!consume_decimal_number(&rest, &num)) { return false; }
     if (rest == ".log") {
         *type = FileType::kLogFile;
     } else if (rest == ".data") {

@@ -37,10 +37,9 @@ namespace ANCHORDB_NAMESPACE {
 //
 // clang-format off
 /*
-    +-------------+----------------+-----------+-------------------+-----------------+---------------------+-----------------------+
-    | crc32 (4B)  | timestamp (8B) | type (1B) | key_size (Varint) |    key_bytes    | value_size (Varint) |      value_bytes      |
-    +-------------+----------------+-----------+-------------------+-----------------+---------------------+-----------------------+
-                                                                        [Raw User Key]                     [Raw String Bytes]
++------------+----------------+-----------+---------------+-----------+---------------------+-------------+
+| crc32 (4B) | timestamp (8B) | type (1B) | key_size (2B) | key_bytes | value_size (Varint) | value_bytes |
++------------+----------------+-----------+---------------+-----------+---------------------+-------------+
 */
 // clang-format on
 //
@@ -50,8 +49,11 @@ namespace ANCHORDB_NAMESPACE {
 //   - timestamp:    uint64_t, little-endian.
 //   - type:         EntryType byte: tombstone (0x0), inline_ (0x1), or blob
 //                   (0x2).
-//   - key_size:     varint64 byte count of key_bytes.
-//     value_size:   varint64 byte count of value_bytes.
+//   - key_size:     uint16_t byte count of key_bytes.  A key can never exceed
+//                   the 64KB index-block segment limit, so a fixed 16-bit
+//                   field is enough.
+//   - value_size:   varint32 byte count of value_bytes.  A value can never
+//                   exceed 4GB, so it fits in 32 bits.
 
 inline constexpr size_t kDataRecordCrcSize = sizeof(uint32_t);       // 4
 inline constexpr size_t kDataRecordTimestampSize = sizeof(uint64_t); // 8
@@ -59,6 +61,9 @@ inline constexpr size_t kDataRecordTimestampSize = sizeof(uint64_t); // 8
 // Fixed prefix before key_size: crc + timestamp + type.
 inline constexpr size_t kDataRecordHeaderSize =
     kDataRecordCrcSize + kDataRecordTimestampSize + sizeof(uint8_t); // 13
+
+// Fixed on-disk size of the key_size field.
+inline constexpr size_t kDataRecordKeySizeSize = sizeof(uint16_t); // 2
 
 // Largest key a record may carry.  The writer rejects a larger key and every
 // decoder reports one as corruption.

@@ -19,6 +19,7 @@
 #include "anchordb/status.h"
 #include "io_uring_config.h" // IWYU pragma: keep
 #include "limiter.h"
+#include <cstddef>
 #include <cstdint>
 #include <unistd.h>
 
@@ -32,7 +33,12 @@ class PosixRandomAccessFileReader final : public RandomAccessFileReader {
     PosixRandomAccessFileReader(std::string filename, int fd, Limiter *limiter,
                                 struct io_uring *ring, bool direct_io = true)
         : filename_(std::move(filename)), has_permanent_fd_(fd >= 0), fd_(fd),
-          limiter_(limiter), ring_(ring), direct_io_(direct_io) {}
+          limiter_(limiter), ring_(ring), direct_io_(direct_io) {
+        struct stat file_stat;
+        if (fstat(fd_, &file_stat) == 0) {
+            file_size_ = static_cast<size_t>(file_stat.st_size);
+        }
+    }
 
     ~PosixRandomAccessFileReader() override {
         if (has_permanent_fd_) {
@@ -43,6 +49,7 @@ class PosixRandomAccessFileReader final : public RandomAccessFileReader {
 
     Status read(uint64_t offset, size_t n, std::string_view *result,
                 char *scratch) override;
+    size_t size() override { return file_size_; }
 
   private:
     Status submit_read_(int fd, void *buf, size_t n, uint64_t offset,
@@ -51,8 +58,10 @@ class PosixRandomAccessFileReader final : public RandomAccessFileReader {
     const std::string filename_;
     const bool has_permanent_fd_;
     const int fd_;
+    size_t file_size_;
     Limiter *const limiter_;
     struct io_uring *const ring_;
     const bool direct_io_;
 };
+
 } // namespace ANCHORDB_NAMESPACE

@@ -18,47 +18,34 @@
 #include "anchordb/status.h"
 #include "sstable/data_record.h"
 #include <cstddef>
-#include <cstdint>
 #include <string>
 
 namespace ANCHORDB_NAMESPACE {
 
 class SequentialFileReader;
 
-// Suggested buffer size to request from Env when opening the
-// SequentialFileReader that backs a RecordReader.  A vLog GC scan walks every
-// record in a file front to back, so a bulk buffer amortizes the per-read
-// overhead.  RecordReader keeps no buffer of its own: it assembles each record
-// in the caller's scratch buffer and relies on the SequentialFileReader for
-// read-ahead.
-inline constexpr size_t kRecordReaderBufferSize = 1 << 20; // 1 MiB
-
-// Largest total encoded record size a reader accepts.  RecordWriter (and the
-// 32-bit location size in an index slot) cannot represent a record larger than
-// this, so anything bigger is corruption rather than a recoverable record.
-inline constexpr size_t kRecordReaderMaxRecordSize = 0xFFFFFFFFu;
-
 // Sequential reader for the data-record format written by RecordWriter (see
-// sstable/data_record.h for the on-disk layout).
+// sstable/data_record.h for the on-disk layout).  The same layout is used by
+// data.bin and the vLog, so this reader serves both.
 //
-// The reader keeps no buffer of its own.  Each record is assembled in the
-// caller-supplied `scratch` buffer and decoded there, so the key/value views in
-// a returned ParsedDataRecord point into `scratch` and are valid only until the
-// next call to read_record() or until the caller reuses `scratch`.  Decoding
-// (including the CRC check) happens inside the reader, so callers only ever see
-// fully validated records.
+// next() reads exactly the bytes of one record through the borrowed
+// SequentialFileReader: the fixed header, the uint16_t key_size, the key, the
+// varint32 value_size, and the value.  It assembles those bytes in an internal
+// buffer, advances the position by data_record_encoded_len(key_size,
+// value_size), and decodes the record with decode_data_record.  The
+// SequentialFileReader provides read-ahead buffering, so the small field reads
+// do not each turn into a file-system read.  It does not own the file: `reader`
+// is borrowed and must outlive this object.
 //
-// Typical use is a vLog garbage-collection scan: open a file, then loop until
-// *eof is true.
+// The file size comes from SequentialFileReader::size(), so there is no end-of
+// -file flag: call next() while !done().  The key/value views in a returned
+// ParsedDataRecord point into the reader's internal buffer and are valid only
+// until the next call to next().
 //
-// Return contract (mirrors WALReader):
-//   * ok, *eof == false, *result set : one record was decoded.
-//   * ok, *eof == true               : clean end of file, or a trailing partial
-//                                      record (a torn write from a crash) that
-//                                      is discarded.
-//   * non-ok                         : corruption or I/O error; *eof == false.
-//                                      The reader position is unspecified, so a
-//                                      failed reader should not be reused.
+// Return contract:
+//   * ok   : one record was decoded and *result is set.
+//   * !ok  : corruption or I/O error.  The reader position is unspecified, so a
+//            failed reader should not be reused.
 //
 // Not thread-safe: use a single reader per file.
 class RecordReader {
@@ -72,27 +59,30 @@ class RecordReader {
 
     ~RecordReader();
 
-    // Reads, validates and decodes the next record into *result.  `scratch` is
-    // the per-call record assembly buffer; the returned views point into it.
-    Status read_record(ParsedDataRecord *result, bool *eof,
-                       std::string *scratch);
+    // Reads, validates and decodes the next record into *result.  Must not be
+    // called once done() is true.
+    Status next(ParsedDataRecord *result);
 
-    // Number of bytes read from the file so far.  Best-effort diagnostic
-    // metric.
-    uint64_t bytes_read() const { return bytes_read_; }
+    // True once position() has reached the file size.
+    bool done() const { return pos_ >= size_; }
+
+    // Absolute file offset of the next record.
+    size_t position() const { return pos_; }
+    size_t size() const { return size_; }
 
   private:
-    // Appends exactly `n` bytes to *scratch.  Sets *eof when the file ends
-    // first, leaving the bytes read so far appended.
-    Status fill_(size_t n, std::string *scratch, bool *eof);
+    // Reads exactly `n` bytes and appends them to buffer_.
+    Status read_exact_(size_t n);
 
-    // Appends one varint64 to *scratch, one byte at a time so the stream is
-    // never read past the varint.  Sets *eof if the file ends mid-varint; the
-    // caller discards the partial bytes in that case.
-    Status read_varint_(std::string *scratch, uint64_t *value, bool *eof);
+    // Reads one varint32 into *value, one byte at a time so it never reads past
+    // the varint.
+    Status read_varint_32_(uint32_t *value);
 
     SequentialFileReader *reader_;
-    uint64_t bytes_read_ = 0;
+    size_t size_ = 0;
+    size_t pos_ = 0;
+    // Bytes of the record currently being decoded; returned views point here.
+    std::string buffer_;
 };
 
 } // namespace ANCHORDB_NAMESPACE

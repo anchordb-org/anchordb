@@ -57,7 +57,7 @@ class RecordBufferReader {
     Status next(ParsedDataRecord *result, bool *done);
 
     // True when no bytes remain.
-    bool empty() const { return pos_ >= buffer_.size(); }
+    bool done() const { return pos_ >= buffer_.size(); }
 
     // Bytes not yet consumed.
     size_t remaining() const { return buffer_.size() - pos_; }

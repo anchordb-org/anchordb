@@ -204,7 +204,7 @@ Status MemTable::read_blob_(const BlobHandle &handle,
     s = record_reader.next(&record, &done);
     if (!s.is_ok()) { return s; }
     if (done) { return Status::corruption("memtable: vlog record missing"); }
-    if (!record_reader.empty()) {
+    if (!record_reader.done()) {
         return Status::corruption("memtable: vlog record has trailing bytes");
     }
     if (!record.is_blob()) {

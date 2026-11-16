@@ -93,14 +93,14 @@ struct ValueHandle {
     |   - free_space_boundary (4 Bytes): Byte offset marking the boundary where backward payload begins         |
     +-----------------------------------------------------------------------------------------------------------+
     | [FORWARD FIXED-SIZE SLOTS ARRAY (Grows forward from byte offset 8)]                                       |
-    |   - Slot 0: [key_local_offset (2B) | type (1B) | file_id (4B) | size (4B) | data_global_offset (8B)]           |
-    |   - Slot 1: [key_local_offset (2B) | type (1B) | file_id (4B) | size (4B) | data_global_offset (8B)]           |
-    |   - Slot N: Totaling 19 bytes per slot.                                                                            |
-    |                                                                                                                    |
-    |       Field Metadata Definitions:                                                                                  |
-    |         - type (1B): [0x0 = Tombstone] | [0x1 = Inline in data.bin] | [0x2 = Pointer to vLog]                     |
-    |         - file_id (4B): vLog file id for blob entries; always 0 otherwise                                          |
-    |         - size (4B): Data record size for inline entries, value size for blob entries                              |
+    |   - Slot 0: [key_local_offset (2B) | type (1B) | file_id (4B) | size (4B) | data_global_offset (8B)]      |
+    |   - Slot 1: [key_local_offset (2B) | type (1B) | file_id (4B) | size (4B) | data_global_offset (8B)]      |
+    |   - Slot N: Totaling 19 bytes per slot.                                                                   |
+    |                                                                                                           |
+    |       Field Metadata Definitions:                                                                         |
+    |         - type (1B): [0x0 = Tombstone] | [0x1 = Inline in data.bin] | [0x2 = Pointer to vLog]             |
+    |         - file_id (4B): vLog file id for blob entries; always 0 otherwise                                 |
+    |         - size (4B): Data record size for inline entries, value size for blob entries                     |
     +-----------------------------------------------------------------------------------------------------------+
     |                                  ... UNUSED BLOCK SPACE ...                                               |
     +-----------------------------------------------------------------------------------------------------------+

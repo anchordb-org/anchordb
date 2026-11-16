@@ -19,6 +19,7 @@
 #include "file_meta.h"
 #include "io_uring_config.h" // IWYU pragma: keep
 #include "util/aligned_buffer.h"
+#include <cstddef>
 #include <unistd.h>
 
 namespace ANCHORDB_NAMESPACE {
@@ -41,6 +42,11 @@ class PosixSequentialFileReader final : public SequentialFileReader {
                 (buffer_size != 0) ? buffer_size : kSeqFileReaderBufSize;
             buf_ = AlignedBuffer(buf_size, kDirectIOAlignment);
         }
+
+        struct stat file_stat;
+        if (fstat(fd_, &file_stat) == 0) {
+            file_size_ = static_cast<size_t>(file_stat.st_size);
+        }
     }
 
     ~PosixSequentialFileReader() override {
@@ -49,12 +55,14 @@ class PosixSequentialFileReader final : public SequentialFileReader {
 
     Status read(size_t n, std::string_view *result, char *scratch) override;
     Status skip(uint64_t n) override;
+    size_t size() override { return file_size_; }
 
   private:
     Status submit_read_(void *dst, size_t len, uint64_t offset,
                         size_t *bytes_read);
 
     const int fd_;
+    size_t file_size_ = 0;
     const std::string filename_;
     struct io_uring *const ring_;
     uint64_t offset_;

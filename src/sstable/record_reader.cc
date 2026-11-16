@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "sstable/record_reader.h"
 #include "anchordb/env.h"
 #include "sstable/data_record.h"
+#include "sstable/record_reader.h"
 #include "util/coding.h"
-#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -26,140 +26,109 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-namespace {
-
-// Grow the assembly buffer in bounded steps.  A record length is read from the
-// file before its payload, so a corrupt length must not trigger a huge
-// allocation when the file actually ends early.
-constexpr size_t kFillChunkSize = 64 * 1024;
-
-} // namespace
-
-RecordReader::RecordReader(SequentialFileReader *reader) : reader_(reader) {}
+RecordReader::RecordReader(SequentialFileReader *reader) : reader_(reader) {
+    if (reader_ != nullptr) { size_ = reader_->size(); }
+}
 
 RecordReader::~RecordReader() = default;
 
-Status RecordReader::fill_(size_t n, std::string *scratch, bool *eof) {
-    *eof = false;
-    const size_t start = scratch->size();
+Status RecordReader::read_exact_(size_t n) {
+    // Bounds check against the known file size; no end-of-file probing.
+    if (n > size_ - (pos_ + buffer_.size())) {
+        return Status::corruption("data record truncated", std::to_string(n));
+    }
 
-    size_t got = 0;
-    while (got < n) {
-        const size_t want = std::min(n - got, kFillChunkSize);
-        scratch->resize(start + got + want);
+    const size_t old = buffer_.size();
+    buffer_.resize(old + n);
 
-        char *dst = scratch->data() + start + got;
-        std::string_view view;
-        Status s = reader_->read(want, &view, dst);
-        if (!s.is_ok()) { return s; }
-        bytes_read_ += view.size();
+    char *dst = buffer_.data() + old;
+    std::string_view view;
+    Status s = reader_->read(n, &view, dst);
+    if (!s.is_ok()) {
+        buffer_.resize(old);
+        return s;
+    }
 
-        if (view.empty()) {
-            *eof = true;
-            scratch->resize(start + got);
-            return Status::ok();
-        }
-        // The reader normally copies into dst; move the bytes if an
-        // implementation instead exposes its own buffer.
-        if (view.data() != dst) { std::memmove(dst, view.data(), view.size()); }
-        got += view.size();
+    // The file reader normally copies into dst; move the bytes if an
+    // implementation instead exposes its own buffer.
+    if (!view.empty() && view.data() != dst) {
+        std::memmove(dst, view.data(), view.size());
+    }
+    if (view.size() != n) {
+        buffer_.resize(old);
+        return Status::corruption("data record short read",
+                                  std::to_string(view.size()));
     }
     return Status::ok();
 }
 
-Status RecordReader::read_varint_(std::string *scratch, uint64_t *value,
-                                  bool *eof) {
-    *eof = false;
-    const size_t start = scratch->size();
+Status RecordReader::read_varint_32_(uint32_t *value) {
+    const size_t start = buffer_.size();
 
-    // A varint64 is at most 10 bytes.  Read it one byte at a time so the stream
-    // is never read past the varint.  A buffered SequentialFileReader serves
-    // these small reads from its read-ahead buffer.
-    for (size_t i = 0; i < 10; ++i) {
-        bool at_eof = false;
-        Status s = fill_(1, scratch, &at_eof);
+    // A varint32 is at most 5 bytes.  Read it one byte at a time so the stream
+    // is never read past the varint.
+    for (int i = 0; i < 5; ++i) {
+        Status s = read_exact_(1);
         if (!s.is_ok()) { return s; }
-        if (at_eof) {
-            *eof = true;
-            return Status::ok();
-        }
 
-        std::string_view pending(scratch->data() + start,
-                                 scratch->size() - start);
-        if (get_varint_64(&pending, value)) { return Status::ok(); }
+        std::string_view pending(buffer_.data() + start,
+                                 buffer_.size() - start);
+        if (get_varint_32(&pending, value)) { return Status::ok(); }
     }
     return Status::corruption("data record truncated varint");
 }
 
-Status RecordReader::read_record(ParsedDataRecord *result, bool *eof,
-                                 std::string *scratch) {
-    if (result == nullptr || eof == nullptr || scratch == nullptr) {
-        return Status::invalid_argument("record_reader: null argument");
+Status RecordReader::next(ParsedDataRecord *result) {
+    if (result == nullptr) {
+        return Status::invalid_argument("record_reader: null result");
     }
     *result = ParsedDataRecord{};
-    *eof = false;
     if (reader_ == nullptr) {
         return Status::invalid_argument("record_reader: null source");
     }
-    scratch->clear();
+    if (done()) {
+        return Status::invalid_argument("record_reader: at end of file");
+    }
+    buffer_.clear();
 
     // crc (4B) | timestamp (8B) | type (1B).
-    bool at_eof = false;
-    Status s = fill_(kDataRecordHeaderSize, scratch, &at_eof);
+    Status s = read_exact_(kDataRecordHeaderSize);
     if (!s.is_ok()) { return s; }
-    if (at_eof) {
-        *eof = true;
-        scratch->clear();
-        return Status::ok();
+    const uint8_t type =
+        static_cast<uint8_t>(buffer_[kDataRecordHeaderSize - 1]);
+    if (type > static_cast<uint8_t>(EntryType::Blob)) {
+        return Status::corruption("data record invalid entry type");
     }
 
-    // key_size varint | key bytes.
-    uint64_t key_size = 0;
-    s = read_varint_(scratch, &key_size, &at_eof);
+    // key_size (uint16_t) | key bytes.
+    s = read_exact_(kDataRecordKeySizeSize);
     if (!s.is_ok()) { return s; }
-    if (at_eof) {
-        *eof = true;
-        scratch->clear();
-        return Status::ok();
-    }
-    if (key_size > kDataRecordMaxKeySize) {
-        return Status::corruption("data record key too large",
-                                  std::to_string(key_size));
-    }
-    s = fill_(static_cast<size_t>(key_size), scratch, &at_eof);
+    const uint16_t key_size =
+        decode_fixed_16(buffer_.data() + kDataRecordHeaderSize);
+    s = read_exact_(key_size);
     if (!s.is_ok()) { return s; }
-    if (at_eof) {
-        *eof = true;
-        scratch->clear();
-        return Status::ok();
-    }
 
-    // value_size varint | value bytes.
-    uint64_t value_size = 0;
-    s = read_varint_(scratch, &value_size, &at_eof);
+    // value_size (varint32) | value bytes.
+    uint32_t value_size = 0;
+    s = read_varint_32_(&value_size);
     if (!s.is_ok()) { return s; }
-    if (at_eof) {
-        *eof = true;
-        scratch->clear();
-        return Status::ok();
-    }
-    const size_t prefix_len = scratch->size();
-    if (value_size > kRecordReaderMaxRecordSize ||
-        prefix_len > kRecordReaderMaxRecordSize ||
-        value_size > kRecordReaderMaxRecordSize - prefix_len) {
-        return Status::corruption("data record size exceeds maximum",
+    if (value_size > size_ - (pos_ + buffer_.size())) {
+        return Status::corruption("data record truncated value",
                                   std::to_string(value_size));
     }
-    s = fill_(static_cast<size_t>(value_size), scratch, &at_eof);
+    s = read_exact_(value_size);
     if (!s.is_ok()) { return s; }
-    if (at_eof) {
-        *eof = true;
-        scratch->clear();
-        return Status::ok();
-    }
 
-    return decode_data_record(
-        std::string_view(scratch->data(), scratch->size()), result);
+    // The fields just read account for exactly one encoded record.
+    const size_t record_len = data_record_encoded_len(key_size, value_size);
+    if (buffer_.size() != record_len) {
+        return Status::corruption("data record length mismatch");
+    }
+    buffer_.resize(record_len);
+    pos_ += record_len;
+
+    return decode_data_record(std::string_view(buffer_.data(), record_len),
+                              result);
 }
 
 } // namespace ANCHORDB_NAMESPACE

@@ -123,6 +123,13 @@ uint32_t decode_fixed_32(const char *src) { return unaligned_load_32(src); }
 // Decodes a 64-bit unsigned integer from a little-endian byte sequence.
 uint64_t decode_fixed_64(const char *src) { return unaligned_load_64(src); }
 
+// Appends a 2-byte little-endian encoding of value to *dst.
+void put_fixed_16(std::string *dst, uint16_t value) {
+    char buf[sizeof(value)];
+    encode_fixed_16(buf, value);
+    dst->append(buf, sizeof(buf));
+}
+
 // Appends a 4-byte little-endian encoding of value to *dst.
 void put_fixed_32(std::string *dst, uint32_t value) {
     char buf[sizeof(value)];

@@ -23,6 +23,40 @@
 
 namespace ANCHORDB_NAMESPACE {
 
+// An always-invalid Iterator, used for empty result sets or to carry an error.
+class EmptyIterator : public Iterator {
+  public:
+    EmptyIterator() = default;
+    EmptyIterator(const Status &s) : status_(s) {}
+    ~EmptyIterator() = default;
+
+    EmptyIterator(EmptyIterator &&other) noexcept
+        : status_(std::move(other.status_)) {}
+    EmptyIterator &operator=(EmptyIterator &&other) {
+        if (this != &other) { this->status_ = std::move(other.status_); }
+        return *this;
+    }
+
+    bool valid() const override { return false; }
+    void seek(std::string_view target) override {}
+    void seek_to_first() override {}
+    void seek_to_last() override {}
+    void next() override { assert(false); }
+    void prev() override { assert(false); }
+    std::string_view key() const override {
+        assert(false);
+        return std::string_view();
+    }
+    std::string_view value() const override {
+        assert(false);
+        return std::string_view();
+    }
+    Status status() const override { return status_; }
+
+  private:
+    Status status_;
+};
+
 // Owns an Iterator and caches the current key and validity, so hot loops can
 // test valid()/key() without a virtual call.  The cache is refreshed after
 // every reposition (set, next, prev, seek*).

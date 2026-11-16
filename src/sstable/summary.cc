@@ -32,23 +32,22 @@ const Comparator kByteWiseComparator{&ByteWiseCompare, nullptr, nullptr,
                                      nullptr};
 } // namespace
 
-SummaryIndexWriter::SummaryIndexWriter(uint32_t block_size,
-                                       uint32_t compressor_id,
-                                       size_t max_key_size)
+SummaryBuilder::SummaryBuilder(uint32_t block_size, uint32_t compressor_id,
+                               size_t max_key_size)
     : block_size_(block_size), compressor_id_(compressor_id),
       max_key_size_(max_key_size) {
     write_header_();
 }
 
-void SummaryIndexWriter::write_header_() {
+void SummaryBuilder::write_header_() {
     char header_buf[kSummaryHeaderSize];
     encode_fixed_32(header_buf, block_size_);
     encode_fixed_32(header_buf + sizeof(uint32_t), compressor_id_);
     buffer_.append(header_buf, kSummaryHeaderSize);
 }
 
-bool SummaryIndexWriter::add(std::string_view key, uint64_t block_offset,
-                             uint32_t compressed_size) {
+bool SummaryBuilder::add(std::string_view key, uint64_t block_offset,
+                         uint32_t compressed_size) {
     if (key.size() > max_key_size_) { return false; }
 
     char length_buf[kSummaryKeyLenSize];
@@ -69,7 +68,7 @@ bool SummaryIndexWriter::add(std::string_view key, uint64_t block_offset,
     return true;
 }
 
-SummaryIndexReader::SummaryIndexReader(std::string_view buffer,
+SummaryReader::SummaryReader(std::string_view buffer,
                                        Comparator comparator)
     : comparator_(comparator), block_size_(0), compressor_id_(0), valid_(true) {
     if (comparator_.compare == nullptr) { comparator_ = kByteWiseComparator; }
@@ -121,12 +120,12 @@ SummaryIndexReader::SummaryIndexReader(std::string_view buffer,
     if (!valid_) { entries_.clear(); }
 }
 
-bool SummaryIndexReader::seek(std::string_view target,
+bool SummaryReader::seek(std::string_view target,
                               uint64_t *block_offset) const {
     return seek(target, block_offset, nullptr);
 }
 
-bool SummaryIndexReader::seek(std::string_view target, uint64_t *block_offset,
+bool SummaryReader::seek(std::string_view target, uint64_t *block_offset,
                               uint32_t *compressed_size) const {
     if (!valid_ || entries_.empty()) { return false; }
 
@@ -144,7 +143,7 @@ bool SummaryIndexReader::seek(std::string_view target, uint64_t *block_offset,
     return true;
 }
 
-size_t SummaryIndexReader::lower_bound(std::string_view target) const {
+size_t SummaryReader::lower_bound(std::string_view target) const {
     if (!valid_) { return entries_.size(); }
 
     // First key >= target.

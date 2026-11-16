@@ -19,7 +19,9 @@
 #include "sstable/data_record.h"
 #include "sstable/record_buffer_reader.h"
 #include "sstable/record_writer.h"
+#include <cassert>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <string_view>
 
@@ -83,7 +85,7 @@ Status MemTable::add(seq_num seq, EntryType type, std::string_view key,
     if (vlog_writer_ != nullptr && type == EntryType::Inline &&
         value.size() > value_threshold_) {
         const uint64_t timestamp = env_ != nullptr ? env_->now_micros() : 0;
-        RecordLocation location;
+        DataRecordLocation location;
         Status s = vlog_writer_->add(key, value, EntryType::Blob, timestamp,
                                      &location);
         if (!s.is_ok()) { return s; }
@@ -102,17 +104,21 @@ Status MemTable::add(seq_num seq, EntryType type, std::string_view key,
 
     size_t key_size = key.size();
     size_t value_size = stored_value.size();
+    // Both lengths are stored as varint32; reject entries that would truncate.
+    if (key_size > UINT32_MAX - 8 || value_size > UINT32_MAX) {
+        return Status::invalid_argument("memtable: entry too large");
+    }
     size_t internal_key_size = key_size + 8;
     const size_t encoded_len = varint_len(key_size) + internal_key_size +
                                varint_len(value_size) + value_size;
     char *buf = arena_.allocate(encoded_len);
     char *p = encode_varint_32(buf, internal_key_size);
-    std::memcpy(p, key.data(), key.size());
+    if (key_size != 0) { std::memcpy(p, key.data(), key_size); }
     p += key_size;
     encode_fixed_64(p, (seq << 8) | static_cast<uint64_t>(stored_type));
     p += 8;
     p = encode_varint_32(p, value_size);
-    std::memcpy(p, stored_value.data(), value_size);
+    if (value_size != 0) { std::memcpy(p, stored_value.data(), value_size); }
     assert(p + value_size == buf + encoded_len);
     table_.insert(buf);
     return Status::ok();
@@ -198,7 +204,7 @@ Status MemTable::read_blob_(const BlobHandle &handle,
                                   std::to_string(view.size()));
     }
 
-    RecordBufferReader record_reader(view);
+    DataRecordBufferReader record_reader(view);
     ParsedDataRecord record;
     bool done = false;
     s = record_reader.next(&record, &done);

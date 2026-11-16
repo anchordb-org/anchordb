@@ -33,10 +33,9 @@ namespace ANCHORDB_NAMESPACE {
 // was opened with; key_count lets a reader distinguish "no keys" from a
 // truncated filter.  The trailing bytes are exactly what Filter::create_filter
 // produced and what Filter::key_may_match expects.
-inline constexpr char kFilterBlockMagic[4] = {'A', 'N', 'D', 'F'};
-inline constexpr size_t kFilterBlockHeaderSize =
-    sizeof(kFilterBlockMagic) + 1 +
-    sizeof(uint32_t); // magic + name_len + count
+inline constexpr char kFilterMagic[4] = {'A', 'N', 'D', 'F'};
+inline constexpr size_t kFilterHeaderSize =
+    sizeof(kFilterMagic) + 1 + sizeof(uint32_t); // magic + name_len + count
 
 // Builds the filter file for one SSTable from the table's user keys.
 //
@@ -48,12 +47,12 @@ inline constexpr size_t kFilterBlockHeaderSize =
 // A builder created with a disabled Filter (null create_filter/name) stays
 // disabled: it buffers nothing and finish() yields an empty buffer, so no
 // filter file is written.
-class FilterBlockBuilder {
+class FilterBuilder {
   public:
-    explicit FilterBlockBuilder(const Filter &filter);
+    explicit FilterBuilder(const Filter &filter);
 
-    FilterBlockBuilder(const FilterBlockBuilder &) = delete;
-    FilterBlockBuilder &operator=(const FilterBlockBuilder &) = delete;
+    FilterBuilder(const FilterBuilder &) = delete;
+    FilterBuilder &operator=(const FilterBuilder &) = delete;
 
     // True if the configured Filter can build a filter (create_filter and name
     // are both non-null).
@@ -83,11 +82,11 @@ class FilterBlockBuilder {
 // Parses a filter file produced by FilterBlockBuilder and answers membership
 // queries for a single table.  The reader borrows the filter bytes, which must
 // outlive it.
-class FilterBlockReader {
+class FilterReader {
   public:
     // `block` must outlive the reader.  The reader is valid only if `block` is
     // well-formed and its embedded filter name matches `filter`.
-    FilterBlockReader(const Filter &filter, std::string_view block);
+    FilterReader(const Filter &filter, std::string_view block);
 
     // True if the block is well-formed and matches the supplied Filter.
     bool valid() const { return valid_; }

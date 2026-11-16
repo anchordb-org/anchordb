@@ -21,7 +21,7 @@
 #include "anchordb/status.h"
 #include "db/db_format.h"
 #include "sstable/filter.h"
-#include "sstable/idx_block_writer.h"
+#include "sstable/index_block.h"
 #include "sstable/summary.h"
 #include <cstddef>
 #include <cstdint>
@@ -136,11 +136,11 @@ class IndexTableBuilder {
     Comparator comparator_;
     Compressor compressor_;
     int compression_level_ = 0;
-    IndexBlockWriter block_writer_;
+    IndexBlockBuilder block_writer_;
     std::string index_;
-    SummaryIndexWriter summary_;
+    SummaryBuilder summary_;
     // Collects the accepted user keys for the per-table filter.
-    FilterBlockBuilder filter_builder_;
+    FilterBuilder filter_builder_;
     // Scratch buffer holding the compressed form of the block being emitted.
     std::string compressed_block_;
     // Last accepted key/timestamp, used to enforce ordering.  last_key_ is only

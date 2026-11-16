@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "anchordb/env.h"
+#include "data_record.h"
 #include "sstable/data_record.h"
 #include "util/coding.h"
 #include "util/crc32.h"
@@ -146,6 +148,235 @@ Status decode_data_record(std::string_view input, ParsedDataRecord *result) {
         *result = ParsedDataRecord{};
         return Status::corruption("trailing bytes after data record");
     }
+    return Status::ok();
+}
+
+namespace {
+
+// A record's location is stored as a uint32_t size, so reject anything larger
+// up front rather than silently truncating it.
+Status check_record_size(size_t record_len) {
+    if (record_len > UINT32_MAX) {
+        return Status::invalid_argument(
+            "record_writer: record exceeds 32-bit size",
+            std::to_string(record_len));
+    }
+    return Status::ok();
+}
+
+} // namespace
+
+DataRecordWriter::DataRecordWriter(WritableFileWriter *dest,
+                                   uint64_t initial_size, uint64_t seal_size)
+    : dest_(dest), size_(initial_size), seal_size_(seal_size) {}
+
+Status DataRecordWriter::add(std::string_view key, std::string_view value_bytes,
+                             EntryType type, uint64_t timestamp,
+                             DataRecordLocation *out) {
+    if (!status_.is_ok()) { return status_; }
+    if (dest_ == nullptr) {
+        return Status::invalid_argument("record_writer: null destination");
+    }
+    if (static_cast<uint8_t>(type) > static_cast<uint8_t>(EntryType::Blob)) {
+        return Status::invalid_argument("record_writer: invalid entry type");
+    }
+    if (key.size() > kDataRecordMaxKeySize) {
+        return Status::invalid_argument("record_writer: key too large",
+                                        std::to_string(key.size()));
+    }
+
+    const size_t record_len =
+        data_record_encoded_len(key.size(), value_bytes.size());
+    Status s = check_record_size(record_len);
+    if (!s.is_ok()) { return s; }
+
+    std::string record;
+    record.reserve(record_len);
+    encode_data_record(&record, timestamp, key, value_bytes, type);
+    return append(record, out);
+}
+
+Status DataRecordWriter::append(std::string_view encoded_record,
+                                DataRecordLocation *out) {
+    if (!status_.is_ok()) { return status_; }
+    if (dest_ == nullptr) {
+        return Status::invalid_argument("record_writer: null destination");
+    }
+
+    Status s = check_record_size(encoded_record.size());
+    if (!s.is_ok()) { return s; }
+
+    s = dest_->append(encoded_record);
+    if (!s.is_ok()) {
+        status_ = s;
+        return status_;
+    }
+
+    if (out != nullptr) {
+        out->offset = size_;
+        out->size = static_cast<uint32_t>(encoded_record.size());
+    }
+    size_ += encoded_record.size();
+    return Status::ok();
+}
+
+Status DataRecordWriter::flush() {
+    if (dest_ == nullptr) {
+        return Status::invalid_argument("record_writer: null destination");
+    }
+    if (!status_.is_ok()) { return status_; }
+
+    Status s = dest_->flush();
+    if (!s.is_ok()) { status_ = s; }
+    return status_;
+}
+
+Status DataRecordWriter::sync() {
+    if (dest_ == nullptr) {
+        return Status::invalid_argument("record_writer: null destination");
+    }
+    if (!status_.is_ok()) { return status_; }
+
+    Status s = dest_->sync();
+    if (!s.is_ok()) { status_ = s; }
+    return status_;
+}
+
+Status DataRecordWriter::close() {
+    if (dest_ == nullptr) {
+        return Status::invalid_argument("record_writer: null destination");
+    }
+
+    // Always attempt the close so the underlying file descriptor is released,
+    // even when an earlier operation failed.  A prior error stays sticky.
+    Status s = dest_->close();
+    if (status_.is_ok()) { status_ = s; }
+    return status_;
+}
+
+DataRecordReader::DataRecordReader(SequentialFileReader *reader)
+    : reader_(reader) {
+    if (reader_ != nullptr) { size_ = reader_->size(); }
+}
+
+DataRecordReader::~DataRecordReader() = default;
+
+Status DataRecordReader::read_exact_(size_t n) {
+    // Bounds check against the known file size; no end-of-file probing.
+    if (n > size_ - (pos_ + buffer_.size())) {
+        return Status::corruption("data record truncated", std::to_string(n));
+    }
+
+    const size_t old = buffer_.size();
+    buffer_.resize(old + n);
+
+    char *dst = buffer_.data() + old;
+    std::string_view view;
+    Status s = reader_->read(n, &view, dst);
+    if (!s.is_ok()) {
+        buffer_.resize(old);
+        return s;
+    }
+
+    // The file reader normally copies into dst; move the bytes if an
+    // implementation instead exposes its own buffer.
+    if (!view.empty() && view.data() != dst) {
+        std::memmove(dst, view.data(), view.size());
+    }
+    if (view.size() != n) {
+        buffer_.resize(old);
+        return Status::corruption("data record short read",
+                                  std::to_string(view.size()));
+    }
+    return Status::ok();
+}
+
+Status DataRecordReader::read_varint_32_(uint32_t *value) {
+    const size_t start = buffer_.size();
+
+    // A varint32 is at most 5 bytes.  Read it one byte at a time so the stream
+    // is never read past the varint.
+    for (int i = 0; i < 5; ++i) {
+        Status s = read_exact_(1);
+        if (!s.is_ok()) { return s; }
+
+        std::string_view pending(buffer_.data() + start,
+                                 buffer_.size() - start);
+        if (get_varint_32(&pending, value)) { return Status::ok(); }
+    }
+    return Status::corruption("data record truncated varint");
+}
+
+Status DataRecordReader::next(ParsedDataRecord *result) {
+    if (result == nullptr) {
+        return Status::invalid_argument("record_reader: null result");
+    }
+    *result = ParsedDataRecord{};
+    if (reader_ == nullptr) {
+        return Status::invalid_argument("record_reader: null source");
+    }
+    if (done()) {
+        return Status::invalid_argument("record_reader: at end of file");
+    }
+    buffer_.clear();
+
+    // crc (4B) | timestamp (8B) | type (1B).
+    Status s = read_exact_(kDataRecordHeaderSize);
+    if (!s.is_ok()) { return s; }
+    const uint8_t type =
+        static_cast<uint8_t>(buffer_[kDataRecordHeaderSize - 1]);
+    if (type > static_cast<uint8_t>(EntryType::Blob)) {
+        return Status::corruption("data record invalid entry type");
+    }
+
+    // key_size (uint16_t) | key bytes.
+    s = read_exact_(kDataRecordKeySizeSize);
+    if (!s.is_ok()) { return s; }
+    const uint16_t key_size =
+        decode_fixed_16(buffer_.data() + kDataRecordHeaderSize);
+    s = read_exact_(key_size);
+    if (!s.is_ok()) { return s; }
+
+    // value_size (varint32) | value bytes.
+    uint32_t value_size = 0;
+    s = read_varint_32_(&value_size);
+    if (!s.is_ok()) { return s; }
+    if (value_size > size_ - (pos_ + buffer_.size())) {
+        return Status::corruption("data record truncated value",
+                                  std::to_string(value_size));
+    }
+    s = read_exact_(value_size);
+    if (!s.is_ok()) { return s; }
+
+    // The fields just read account for exactly one encoded record.
+    const size_t record_len = data_record_encoded_len(key_size, value_size);
+    if (buffer_.size() != record_len) {
+        return Status::corruption("data record length mismatch");
+    }
+    buffer_.resize(record_len);
+    pos_ += record_len;
+
+    return decode_data_record(std::string_view(buffer_.data(), record_len),
+                              result);
+}
+
+Status DataRecordBufferReader::next(ParsedDataRecord *result, bool *done) {
+    if (result == nullptr || done == nullptr) {
+        return Status::invalid_argument("record_buffer_reader: null argument");
+    }
+    *result = ParsedDataRecord{};
+    *done = false;
+
+    if (pos_ >= buffer_.size()) {
+        *done = true;
+        return Status::ok();
+    }
+
+    std::string_view cursor = buffer_.substr(pos_);
+    Status s = decode_data_record(&cursor, result);
+    if (!s.is_ok()) { return s; }
+
+    pos_ = buffer_.size() - cursor.size();
     return Status::ok();
 }
 

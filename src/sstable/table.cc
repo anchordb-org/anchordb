@@ -12,15 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "sstable/table.h"
 #include "anchordb/env.h"
 #include "anchordb/status.h"
 #include "file/filename.h"
 #include "sstable/data_record.h"
 #include "sstable/filter.h"
-#include "sstable/idx_block_reader.h"
-#include "sstable/idx_block_writer.h"
+#include "sstable/index_block.h"
 #include "sstable/summary.h"
+#include "sstable/table.h"
 #include <cassert>
 #include <cstring>
 #include <memory>
@@ -210,11 +209,11 @@ struct Table::Rep {
     // verbatim and are parsed directly (see read_index_block).
     Compressor compressor;
     std::string summary_buffer;
-    SummaryIndexReader *summary = nullptr;
+    SummaryReader *summary = nullptr;
     // Resident filter file bytes and its parsed reader.  `filter` is null when
     // the table has no (usable) filter.
     std::string filter_buffer;
-    std::unique_ptr<FilterBlockReader> filter;
+    std::unique_ptr<FilterReader> filter;
     RandomAccessFileReader *index_reader = nullptr;
     RandomAccessFileReader *data_reader = nullptr;
     uint64_t index_file_size = 0;
@@ -545,7 +544,7 @@ Status Table::open(const Options &options, const TableFileSet &files,
         return s;
     }
 
-    rep->summary = new SummaryIndexReader(rep->summary_buffer, rep->comparator);
+    rep->summary = new SummaryReader(rep->summary_buffer, rep->comparator);
     if (!rep->summary->valid()) {
         delete rep;
         return Status::corruption("invalid summary index");
@@ -614,8 +613,8 @@ Status Table::open(const Options &options, const TableFileSet &files,
                 delete rep;
                 return fs;
             }
-            auto reader = std::make_unique<FilterBlockReader>(
-                options.filter, rep->filter_buffer);
+            auto reader = std::make_unique<FilterReader>(options.filter,
+                                                         rep->filter_buffer);
             if (reader->valid()) { rep->filter = std::move(reader); }
         }
     }

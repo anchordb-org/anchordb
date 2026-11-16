@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "anchordb/iterator.h"
 #include "anchordb/anchordb_namespace.h"
-#include "sstable/empty_iter.h"
+#include "anchordb/iterator.h"
+#include "util/iter.h"
 
 namespace ANCHORDB_NAMESPACE {
 

@@ -20,11 +20,11 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-FilterBlockBuilder::FilterBlockBuilder(const Filter &filter)
+FilterBuilder::FilterBuilder(const Filter &filter)
     : filter_(filter),
       enabled_(filter.create_filter != nullptr && filter.name != nullptr) {}
 
-void FilterBlockBuilder::add(std::string_view user_key) {
+void FilterBuilder::add(std::string_view user_key) {
     if (!enabled_) { return; }
     // Keys arrive in ascending order, so equal user keys are adjacent; keeping
     // only the first of each run shrinks the filter without affecting queries.
@@ -35,13 +35,13 @@ void FilterBlockBuilder::add(std::string_view user_key) {
     has_last_key_ = true;
 }
 
-const std::string &FilterBlockBuilder::finish() {
+const std::string &FilterBuilder::finish() {
     if (finished_) { return block_; }
     finished_ = true;
     if (!enabled_) { return block_; }
 
     block_.clear();
-    block_.append(kFilterBlockMagic, sizeof(kFilterBlockMagic));
+    block_.append(kFilterMagic, sizeof(kFilterMagic));
 
     const char *name = filter_.name(filter_.state);
     size_t name_len = (name != nullptr) ? std::strlen(name) : 0;
@@ -62,19 +62,18 @@ const std::string &FilterBlockBuilder::finish() {
     return block_;
 }
 
-FilterBlockReader::FilterBlockReader(const Filter &filter,
-                                     std::string_view block)
+FilterReader::FilterReader(const Filter &filter, std::string_view block)
     : filter_(filter) {
     if (filter_.name == nullptr || filter_.key_may_match == nullptr) { return; }
-    if (block.size() < kFilterBlockHeaderSize) { return; }
-    if (std::memcmp(block.data(), kFilterBlockMagic,
-                    sizeof(kFilterBlockMagic)) != 0) {
+    if (block.size() < kFilterHeaderSize) { return; }
+    if (std::memcmp(block.data(), kFilterMagic,
+                    sizeof(kFilterMagic)) != 0) {
         return;
     }
 
     const size_t name_len =
-        static_cast<unsigned char>(block[sizeof(kFilterBlockMagic)]);
-    const size_t name_start = sizeof(kFilterBlockMagic) + 1;
+        static_cast<unsigned char>(block[sizeof(kFilterMagic)]);
+    const size_t name_start = sizeof(kFilterMagic) + 1;
     if (name_len > block.size() - name_start) { return; }
 
     const char *expected = filter_.name(filter_.state);
@@ -91,7 +90,7 @@ FilterBlockReader::FilterBlockReader(const Filter &filter,
     valid_ = true;
 }
 
-bool FilterBlockReader::key_may_match(std::string_view user_key) const {
+bool FilterReader::key_may_match(std::string_view user_key) const {
     if (!valid_) { return true; }
     // No keys were stored, so every query is a certain miss.
     if (key_count_ == 0) { return false; }

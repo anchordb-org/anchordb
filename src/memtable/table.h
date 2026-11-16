@@ -19,6 +19,7 @@
 #include "db/db_format.h"
 #include "memory/arena.h"
 #include "memtable/skiplist.h"
+#include <atomic>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -32,7 +33,7 @@ namespace ANCHORDB_NAMESPACE {
 
 class Env;
 class MemTable;
-class RecordWriter;
+class DataRecordWriter;
 
 // Decodes a length-prefixed slice: varint32 length followed by the payload.
 inline std::string_view get_len_prefixed_slice(const char *data) {
@@ -134,15 +135,14 @@ class MemtableIterator : public Iterator {
 // numbered vLog file by `file_id` when a blob value is read back.
 class MemTable {
   public:
-    explicit MemTable(const Comparator comparator,
-                      const uint32_t arena_block_size,
+    explicit MemTable(Comparator comparator, const uint32_t arena_block_size,
                       size_t max_key_size = kDefaultMaxKeySize,
-                      RecordWriter *vlog_writer = nullptr,
+                      DataRecordWriter *vlog_writer = nullptr,
                       uint32_t vlog_file_id = 0,
                       size_t value_threshold = 4 * 1024, Env *env = nullptr,
                       std::string vlog_dbname = std::string())
         : comparator_(std::move(comparator)), arena_(arena_block_size),
-          refs_(0), max_key_size_(max_key_size),
+          refs_{0}, max_key_size_(max_key_size),
           value_threshold_(value_threshold), vlog_writer_(vlog_writer),
           vlog_file_id_(vlog_file_id), env_(env),
           vlog_dbname_(std::move(vlog_dbname)),
@@ -151,12 +151,13 @@ class MemTable {
     MemTable(const MemTable &) = delete;
     MemTable &operator=(const MemTable &) = delete;
 
-    // Reference counting for shared ownership.
-    void ref() { ++refs_; }
+    // Reference counting for shared ownership.  Atomic so a reader holding a
+    // reference may release it while another thread holds or drops its own.
+    void ref() { refs_.fetch_add(1, std::memory_order_relaxed); }
     void unref() {
-        --refs_;
-        assert(refs_ >= 0);
-        if (refs_ <= 0) { delete this; }
+        const int old = refs_.fetch_sub(1, std::memory_order_acq_rel);
+        assert(old >= 1);
+        if (old == 1) { delete this; }
     }
 
     size_t approximate_memory_usage() const { return arena_.memory_usage(); }
@@ -179,7 +180,7 @@ class MemTable {
   private:
     friend class MemtableIterator;
 
-    ~MemTable() { assert(refs_ == 0); }
+    ~MemTable() { assert(refs_.load(std::memory_order_relaxed) == 0); }
 
     // Reads and decodes the vLog record referenced by `handle`, copies its
     // value into *value and validates the stored key and entry type.
@@ -188,10 +189,10 @@ class MemTable {
 
     Comparator comparator_;
     Arena arena_;
-    int refs_;
+    std::atomic<int> refs_;
     size_t max_key_size_;
     size_t value_threshold_;
-    RecordWriter *vlog_writer_;
+    DataRecordWriter *vlog_writer_;
     uint32_t vlog_file_id_;
     Env *env_;
     std::string vlog_dbname_;

@@ -60,18 +60,18 @@ struct SummaryEntry {
 // whole table; compressor_id records the Compressor::id used to compress every
 // index block (0 = blocks stored verbatim).  Readers use it to reject a table
 // opened with a different codec. Entries must be added in ascending key order.
-class SummaryIndexWriter {
+class SummaryBuilder {
   public:
     // `block_size` is the index-block segment size for the whole table;
     // `compressor_id` is the codec used for the index blocks (0 when they are
     // stored verbatim).  Both are written as the summary header. `max_key_size`
     // bounds the separator keys stored in the summary and must match the limit
     // used for the corresponding index blocks.
-    explicit SummaryIndexWriter(uint32_t block_size, uint32_t compressor_id = 0,
-                                size_t max_key_size = kDefaultMaxKeySize);
+    explicit SummaryBuilder(uint32_t block_size, uint32_t compressor_id = 0,
+                            size_t max_key_size = kDefaultMaxKeySize);
 
-    SummaryIndexWriter(const SummaryIndexWriter &) = delete;
-    SummaryIndexWriter &operator=(const SummaryIndexWriter &) = delete;
+    SummaryBuilder(const SummaryBuilder &) = delete;
+    SummaryBuilder &operator=(const SummaryBuilder &) = delete;
 
     void reset() {
         buffer_.clear();
@@ -119,13 +119,13 @@ class SummaryIndexWriter {
 // Parses a summary index buffer and resolves lookups to absolute block offsets.
 // Views stored by the reader point into the supplied buffer, which must outlive
 // it.  Ordering uses the supplied Comparator (null falls back to bytewise).
-class SummaryIndexReader {
+class SummaryReader {
   public:
-    explicit SummaryIndexReader(std::string_view buffer,
+    explicit SummaryReader(std::string_view buffer,
                                 Comparator comparator = Comparator{});
 
-    SummaryIndexReader(const SummaryIndexReader &) = delete;
-    SummaryIndexReader &operator=(const SummaryIndexReader &) = delete;
+    SummaryReader(const SummaryReader &) = delete;
+    SummaryReader &operator=(const SummaryReader &) = delete;
 
     // False if the buffer was truncated or otherwise malformed while parsing.
     bool valid() const { return valid_; }

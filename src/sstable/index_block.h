@@ -15,6 +15,7 @@
 #pragma once
 
 #include "anchordb/anchordb_namespace.h"
+#include "anchordb/iterator.h"
 #include "db/db_format.h"
 #include "file/file_meta.h"
 #include "util/coding.h"
@@ -112,22 +113,22 @@ struct ValueHandle {
 // clang-format on
 // The segment size is clamped to [4KB, 64KB] and rounded up to the nearest
 // multiple of kIndexBlockAlignment by the constructor.
-class IndexBlockWriter {
+class IndexBlockBuilder {
   public:
     // `block_size` is clamped to [4KB, 64KB] and aligned via
     // round_index_block_size().  `max_key_size` is the requested key limit but
     // is capped to block_size() / 4, so a key can never dominate a block.  Keys
     // longer than the effective limit are rejected by add().
-    explicit IndexBlockWriter(size_t block_size = kDefaultBlockSize,
-                              size_t max_key_size = kDefaultMaxKeySize)
+    explicit IndexBlockBuilder(size_t block_size = kDefaultBlockSize,
+                               size_t max_key_size = kDefaultMaxKeySize)
         : block_size_(round_index_block_size(block_size)),
           requested_max_key_size_(max_key_size), buffer_(new char[block_size_]),
           free_space_boundary_(block_size_) {}
 
-    IndexBlockWriter(const IndexBlockWriter &) = delete;
-    IndexBlockWriter &operator=(const IndexBlockWriter &) = delete;
+    IndexBlockBuilder(const IndexBlockBuilder &) = delete;
+    IndexBlockBuilder &operator=(const IndexBlockBuilder &) = delete;
 
-    ~IndexBlockWriter() { delete[] buffer_; }
+    ~IndexBlockBuilder() { delete[] buffer_; }
 
     void reset() noexcept {
         slot_count_ = 0;
@@ -197,6 +198,70 @@ class IndexBlockWriter {
     int64_t last_entry_offset_{-1};
     bool sealed_{false};
     bool finished_{false};
+};
+
+// Encoded size of the value returned by an index block iterator's value():
+//   [ type (1B) | file_id (4B) | size (4B) | offset (8B) | timestamp (8B) ]
+// Decode it with IndexBlockReader::decode_value().
+inline constexpr size_t kIndexValueSize = sizeof(uint8_t) + sizeof(uint32_t) +
+                                          sizeof(uint32_t) + sizeof(uint64_t) +
+                                          sizeof(uint64_t);
+
+// A fully decoded index block entry.
+struct IndexBlockEntry {
+    std::string_view key;
+    ValueHandle handle;
+    uint64_t timestamp;
+};
+
+// Parses an index block segment produced by IndexBlockWriter.  All returned
+// views point into the block buffer, which must outlive this reader.
+//
+// `block_size` is clamped to [4KB, 64KB] and aligned the same way the writer
+// aligns it (see round_index_block_size); only the first `block_size` bytes are
+// parsed.  valid() is false if the block is truncated or otherwise malformed.
+class IndexBlockReader {
+  public:
+    explicit IndexBlockReader(std::string_view block,
+                              size_t block_size = kDefaultBlockSize);
+
+    IndexBlockReader(const IndexBlockReader &) = delete;
+    IndexBlockReader &operator=(const IndexBlockReader &) = delete;
+
+    bool valid() const { return valid_; }
+
+    // Configured (and aligned) segment size this block was read with.
+    size_t block_size() const { return block_size_; }
+
+    // Number of entries (slots) in the block.
+    size_t size() const { return slot_count_; }
+    bool empty() const { return slot_count_ == 0; }
+
+    // Decoded entry at index (0 <= index < size()).  Slot order is ascending
+    // key order.
+    IndexBlockEntry entry(size_t index) const;
+    std::string_view key(size_t index) const { return entry(index).key; }
+    ValueHandle handle(size_t index) const { return entry(index).handle; }
+    uint64_t timestamp(size_t index) const { return entry(index).timestamp; }
+
+    // Returns a heap-allocated iterator over the entries in ascending key
+    // order: key() is the entry key, value() is a kIndexValueSize-byte record
+    // (see decode_value).  The caller owns it and must keep this reader (and
+    // its block buffer) alive.  A malformed block yields an error iterator; an
+    // empty block yields an empty iterator.
+    Iterator *new_iterator(Comparator comparator = Comparator{}) const;
+
+    // Decodes a value() view produced by the iterator into a handle/timestamp.
+    // Returns false if the view is not exactly kIndexValueSize bytes.
+    static bool decode_value(std::string_view value, ValueHandle *handle,
+                             uint64_t *timestamp);
+
+  private:
+    const char *data_;
+    size_t size_;
+    size_t block_size_;
+    uint32_t slot_count_;
+    bool valid_;
 };
 
 } // namespace ANCHORDB_NAMESPACE

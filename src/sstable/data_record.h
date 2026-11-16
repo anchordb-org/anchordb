@@ -24,6 +24,9 @@
 
 namespace ANCHORDB_NAMESPACE {
 
+class WritableFileWriter;
+class SequentialFileReader;
+
 // Self-describing record format used by data.bin and the WiscKey value log
 // (vLog).  The stateless encode/decode functions below are the single
 // implementation of this layout; RecordWriter, RecordReader and
@@ -105,5 +108,189 @@ Status decode_data_record(std::string_view *input, ParsedDataRecord *result);
 
 // Decodes exactly one complete record from `record` (no trailing bytes).
 Status decode_data_record(std::string_view input, ParsedDataRecord *result);
+
+// Where a record landed inside a record file: the absolute byte offset and the
+// total encoded size.  This is exactly what an index slot records for an inline
+// entry in data.bin.  For a blob entry the index slot instead addresses the
+// value bytes inside a vLog record.
+struct DataRecordLocation {
+    uint64_t offset = 0;
+    uint32_t size = 0;
+};
+
+// Append-only writer for the shared record format (see sstable/data_record.h
+// for the wire layout).  The same writer serves both data.bin and the WiscKey
+// value log (vLog); it does not care which file `dest` refers to because both
+// use identical record entries.
+//
+// The writer frames records: callers hand it a key, value, type and timestamp,
+// and it encodes and appends the record.  It does not own `dest`; the caller
+// opens the intended file through Env and keeps it alive.  It tracks the
+// running append offset.  For a long-lived append-only file such as the vLog,
+// seal_size > 0 makes sealed() report true once the file should be rolled; the
+// roll policy is left to the caller.  Destruction does not flush or close
+// `dest`; call flush(), sync() or close() explicitly.
+//
+// File-operation errors are sticky: once append(), flush(), sync() or close()
+// fails, later calls return the same Status without attempting further writes,
+// so a caller cannot unknowingly continue writing after a partial write.
+// close() is the exception: it still attempts to close the underlying file so
+// the descriptor is released, then returns the sticky status.
+//
+// Not thread-safe: use a single writer per file, serialized by the caller.
+class DataRecordWriter {
+  public:
+    // `initial_size` seeds the offset for an appendable (resumed) file; pass 0
+    // for a freshly created file.  A `seal_size` of 0 disables sealing.
+    DataRecordWriter(WritableFileWriter *dest, uint64_t initial_size = 0,
+                     uint64_t seal_size = 0);
+
+    DataRecordWriter(const DataRecordWriter &) = delete;
+    DataRecordWriter &operator=(const DataRecordWriter &) = delete;
+
+    // Encodes one record and appends it.  `value_bytes` is the raw value (for a
+    // record written to the vLog, the blob payload).  The key limit and entry
+    // type are checked before anything is written.  On success fills *out (if
+    // non-null) with the record's location.
+    Status add(std::string_view key, std::string_view value_bytes,
+               EntryType type, uint64_t timestamp, DataRecordLocation *out);
+
+    // Appends a record that has already been encoded in this format, for
+    // callers that already hold the bytes (for example a compaction copying an
+    // unchanged record between data files).  The bytes are not revalidated.
+    // Returns Status::invalid_argument if the record cannot fit in a 32-bit
+    // location.
+    Status append(std::string_view encoded_record, DataRecordLocation *out);
+
+    // Bytes appended so far (also the offset of the next record).
+    uint64_t size() const { return size_; }
+
+    // True once size() has reached the seal threshold.  Always false when
+    // sealing is disabled.
+    bool sealed() const { return seal_size_ != 0 && size_ >= seal_size_; }
+
+    // Sticky status of the writer: non-ok once a file operation has failed.
+    const Status &status() const { return status_; }
+
+    Status flush();
+    Status sync();
+    Status close();
+
+  private:
+    WritableFileWriter *dest_;
+    uint64_t size_;
+    uint64_t seal_size_;
+    Status status_;
+};
+
+// Sequential reader for the data-record format written by RecordWriter (see
+// sstable/data_record.h for the on-disk layout).  The same layout is used by
+// data.bin and the vLog, so this reader serves both.
+//
+// next() reads exactly the bytes of one record through the borrowed
+// SequentialFileReader: the fixed header, the uint16_t key_size, the key, the
+// varint32 value_size, and the value.  It assembles those bytes in an internal
+// buffer, advances the position by data_record_encoded_len(key_size,
+// value_size), and decodes the record with decode_data_record.  The
+// SequentialFileReader provides read-ahead buffering, so the small field reads
+// do not each turn into a file-system read.  It does not own the file: `reader`
+// is borrowed and must outlive this object.
+//
+// The file size comes from SequentialFileReader::size(), so there is no end-of
+// -file flag: call next() while !done().  The key/value views in a returned
+// ParsedDataRecord point into the reader's internal buffer and are valid only
+// until the next call to next().
+//
+// Return contract:
+//   * ok   : one record was decoded and *result is set.
+//   * !ok  : corruption or I/O error.  The reader position is unspecified, so a
+//            failed reader should not be reused.
+//
+// Not thread-safe: use a single reader per file.
+class DataRecordReader {
+  public:
+    // Reads from an already-open sequential file positioned at the first
+    // record.  `reader` is borrowed and must outlive this object.
+    explicit DataRecordReader(SequentialFileReader *reader);
+
+    DataRecordReader(const DataRecordReader &) = delete;
+    DataRecordReader &operator=(const DataRecordReader &) = delete;
+
+    ~DataRecordReader();
+
+    // Reads, validates and decodes the next record into *result.  Must not be
+    // called once done() is true.
+    Status next(ParsedDataRecord *result);
+
+    // True once position() has reached the file size.
+    bool done() const { return pos_ >= size_; }
+
+    // Absolute file offset of the next record.
+    size_t position() const { return pos_; }
+    size_t size() const { return size_; }
+
+  private:
+    // Reads exactly `n` bytes and appends them to buffer_.
+    Status read_exact_(size_t n);
+
+    // Reads one varint32 into *value, one byte at a time so it never reads past
+    // the varint.
+    Status read_varint_32_(uint32_t *value);
+
+    SequentialFileReader *reader_;
+    size_t size_ = 0;
+    size_t pos_ = 0;
+    // Bytes of the record currently being decoded; returned views point here.
+    std::string buffer_;
+};
+
+// Sequential decoder for records that are already in memory.
+//
+// Construct it over a buffer holding one or more complete records, such as the
+// bytes fetched with a RandomAccessFileReader at an index handle's offset and
+// size.  next() decodes one record at a time and advances through the buffer;
+// it works the same for a single record or many.
+//
+// The buffer is borrowed and must outlive the reader.  Returned key/value views
+// point into it.  A truncated or malformed record is reported as corruption; a
+// caller that fetches exact index ranges should never see a partial record.  On
+// error, next() leaves the read position unchanged.
+//
+// Not thread-safe: use a single reader per buffer.
+//
+// Typical loop:
+//   bool done = false;
+//   while (!done) {
+//       ParsedDataRecord record;
+//       Status s = reader.next(&record, &done);
+//       if (!s.is_ok()) { ... }
+//       if (done) break;
+//       use(record);
+//   }
+class DataRecordBufferReader {
+  public:
+    explicit DataRecordBufferReader(std::string_view buffer)
+        : buffer_(buffer) {}
+
+    DataRecordBufferReader(const DataRecordBufferReader &) = delete;
+    DataRecordBufferReader &operator=(const DataRecordBufferReader &) = delete;
+
+    // Decodes the next record.  Sets *done=false and fills *result when a
+    // record was decoded, or sets *done=true when the buffer is exhausted.
+    Status next(ParsedDataRecord *result, bool *done);
+
+    // True when no bytes remain.
+    bool done() const { return pos_ >= buffer_.size(); }
+
+    // Bytes not yet consumed.
+    size_t remaining() const { return buffer_.size() - pos_; }
+
+    // Restarts decoding from the beginning of the buffer.
+    void reset() { pos_ = 0; }
+
+  private:
+    std::string_view buffer_;
+    size_t pos_ = 0;
+};
 
 } // namespace ANCHORDB_NAMESPACE

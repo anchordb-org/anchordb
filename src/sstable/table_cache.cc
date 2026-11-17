@@ -15,7 +15,7 @@
 #include "sstable/table_cache.h"
 #include "anchordb/cache.h"
 #include "anchordb/status.h"
-#include "sstable/table.h"
+#include "sstable/table_file_set.h"
 #include "util/coding.h"
 #include <string>
 #include <string_view>
@@ -62,54 +62,53 @@ std::string TableCache::cache_key(uint64_t table_number) const {
 }
 
 void TableCache::delete_entry(std::string_view, void *value) {
-    static_cast<Table *>(value)->unref();
+    static_cast<TableReader *>(value)->unref();
 }
 
-Status TableCache::find_table(uint64_t table_number, Table **out) {
-    if (out == nullptr) {
+Status TableCache::find_table(uint64_t table_number, Cache::Handle **handle,
+                              TableReader **reader) {
+    if (handle == nullptr || reader == nullptr) {
         return Status::invalid_argument("TableCache::find_table: null output");
     }
 
     const std::string key = cache_key(table_number);
-    Cache::Handle *handle = cache_.lookup(key);
-    if (handle != nullptr) {
-        Table *table = static_cast<Table *>(cache_.value(handle));
-        table->ref();
-        cache_.release(handle);
-        *out = table;
+    Cache::Handle *cached = cache_.lookup(key);
+    if (cached != nullptr) {
+        *handle = cached;
+        *reader = static_cast<TableReader *>(cache_.value(cached));
         return Status::ok();
     }
 
     const TableFileSet files = make_table_file_set(db_dir_, table_number);
-    Table *table = nullptr;
-    Status s = Table::open(options_, files, &table);
+    TableReader *opened = nullptr;
+    Status s = TableReader::open(options_, files, db_dir_, &opened);
     if (!s.is_ok()) { return s; }
 
-    // open() returned one reference.  Give the cache its own reference, then
-    // hand the caller the original one.
-    table->ref();
     Cache::Handle *inserted =
-        cache_.insert(key, table, table->cache_charge(), &delete_entry);
-    if (inserted != nullptr) {
-        cache_.release(inserted);
-        *out = table;
-    } else {
-        // Cache is disabled (zero capacity): no cache reference was taken, so
-        // drop the extra reference and hand the table directly to the caller.
-        table->unref();
-        *out = table;
-    }
+        cache_.insert(key, opened, opened->cache_charge(), &delete_entry);
+    // A cache implementation that declines the entry returns no handle; the
+    // caller then owns `opened` through the null-handle convention.
+    *handle = inserted;
+    *reader = opened;
     return Status::ok();
 }
 
 Status TableCache::get(const ReadOptions &options, uint64_t table_number,
                        std::string_view key, std::string *value,
                        std::string *scratch) {
-    Table *table = nullptr;
-    Status s = find_table(table_number, &table);
+    Cache::Handle *handle = nullptr;
+    TableReader *reader = nullptr;
+    Status s = find_table(table_number, &handle, &reader);
     if (!s.is_ok()) { return s; }
-    Status result = table->get(options, key, value, scratch);
-    table->unref();
+
+    Status result = reader->get(options, key, value, scratch);
+
+    // Releasing the handle may delete the reader, so it must be the last use.
+    if (handle != nullptr) {
+        cache_.release(handle);
+    } else {
+        reader->unref();
+    }
     return result;
 }
 
@@ -119,11 +118,21 @@ Status TableCache::new_iterator(const ReadOptions &options,
         return Status::invalid_argument(
             "TableCache::new_iterator: null iterator output");
     }
-    Table *table = nullptr;
-    Status s = find_table(table_number, &table);
+
+    Cache::Handle *handle = nullptr;
+    TableReader *reader = nullptr;
+    Status s = find_table(table_number, &handle, &reader);
     if (!s.is_ok()) { return s; }
-    *iter = table->new_iterator(options);
-    table->unref();
+
+    *iter = reader->new_iterator(options);
+
+    // The iterator holds its own reader reference, so the cache pin (or the
+    // caller's reference when the cache declined the entry) can be dropped.
+    if (handle != nullptr) {
+        cache_.release(handle);
+    } else {
+        reader->unref();
+    }
     return Status::ok();
 }
 

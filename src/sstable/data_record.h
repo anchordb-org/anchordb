@@ -34,9 +34,8 @@ class SequentialFileReader;
 //
 // data.bin stores inline and tombstone records, and an index slot addresses a
 // record by its (offset, size) in data.bin.  The vLog stores blob records with
-// the same layout, but a blob's index slot addresses only the value bytes
-// inside a vLog record (file_id, value offset, value size), never the record
-// header.
+// the same layout, and a blob's index slot addresses the complete vLog record
+// by (file_id, record offset, record size), starting at the record header.
 //
 // clang-format off
 /*
@@ -82,7 +81,7 @@ struct ParsedDataRecord {
 
     // True when this record holds a large value that belongs in the vLog
     // instead of inline in data.bin.  In a vLog record the value bytes are
-    // still in `value`; the index slot addresses them directly.
+    // still in `value`; the index slot addresses the complete record.
     bool is_blob() const { return type == EntryType::Blob; }
     // True when this record marks a deleted key.
     bool is_deletion() const { return type == EntryType::Tombstone; }
@@ -109,10 +108,9 @@ Status decode_data_record(std::string_view *input, ParsedDataRecord *result);
 // Decodes exactly one complete record from `record` (no trailing bytes).
 Status decode_data_record(std::string_view input, ParsedDataRecord *result);
 
-// Where a record landed inside a record file: the absolute byte offset and the
-// total encoded size.  This is exactly what an index slot records for an inline
-// entry in data.bin.  For a blob entry the index slot instead addresses the
-// value bytes inside a vLog record.
+// Where a record landed inside a record file: the absolute byte offset of the
+// record header and the total encoded size.  This is exactly what an index slot
+// records for an inline entry in data.bin and for a blob entry in a vLog file.
 struct DataRecordLocation {
     uint64_t offset = 0;
     uint32_t size = 0;
@@ -140,9 +138,12 @@ struct DataRecordLocation {
 // Not thread-safe: use a single writer per file, serialized by the caller.
 class DataRecordWriter {
   public:
-    // `initial_size` seeds the offset for an appendable (resumed) file; pass 0
-    // for a freshly created file.  A `seal_size` of 0 disables sealing.
-    DataRecordWriter(WritableFileWriter *dest, uint64_t initial_size = 0,
+    // `initial_size` must be the number of bytes already present in `dest`.
+    // Pass 0 for a freshly created or truncated file; when `dest` is an
+    // appendable writer for an existing file, pass that file's current size so
+    // record locations continue at the real end of the file.  A `seal_size` of
+    // 0 disables sealing.
+    DataRecordWriter(WritableFileWriter *dest, uint64_t initial_size,
                      uint64_t seal_size = 0);
 
     DataRecordWriter(const DataRecordWriter &) = delete;

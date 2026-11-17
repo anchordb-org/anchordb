@@ -72,13 +72,12 @@ struct ValueHandle {
     // entries.
     uint32_t file_id;
     // For inline_ entries this is the absolute offset of the data record in
-    // data.bin; for blob entries it is the offset of the value in the vLog file
-    // identified by file_id.
+    // data.bin; for blob entries it is the absolute offset of the complete
+    // record in the vLog file identified by file_id, starting at its header.
     uint64_t offset;
-    // For inline_ entries the total encoded size of the data record in
-    // data.bin; for blob entries the size of the value in the vLog.  uint32_t
-    // because oversized values go to the vLog, so an inline record always fits
-    // in 32 bits.
+    // Total encoded record size: the data record size for inline_ entries and
+    // the full vLog record size for blob entries.  uint32_t because oversized
+    // values go to the vLog, so an inline record always fits in 32 bits.
     uint32_t size;
 };
 
@@ -101,7 +100,7 @@ struct ValueHandle {
     |       Field Metadata Definitions:                                                                         |
     |         - type (1B): [0x0 = Tombstone] | [0x1 = Inline in data.bin] | [0x2 = Pointer to vLog]             |
     |         - file_id (4B): vLog file id for blob entries; always 0 otherwise                                 |
-    |         - size (4B): Data record size for inline entries, value size for blob entries                     |
+    |         - size (4B): Full encoded record size for inline and blob entries                                 |
     +-----------------------------------------------------------------------------------------------------------+
     |                                  ... UNUSED BLOCK SPACE ...                                               |
     +-----------------------------------------------------------------------------------------------------------+

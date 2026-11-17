@@ -15,11 +15,10 @@
 #pragma once
 
 #include "anchordb/anchordb_namespace.h"
-#include "anchordb/iterator.h"
 #include "anchordb/options.h"
 #include "anchordb/status.h"
 #include "cache/cache_wrapper.h"
-#include "sstable/table.h"
+#include "sstable/table_reader.h"
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -27,17 +26,17 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-// Caches open Tables so repeated reads of the same table number avoid
+// Caches open TableReaders so repeated reads of the same table number avoid
 // re-opening files and re-parsing the summary.  The backing Cache is chosen by
 // Options::table_cache_type/size and owned through a CacheWrapper.
 //
-// Captured Options are forwarded unchanged to Table::open, so cached tables use
-// the same compressor the writer used.  Only the parsed summary is charged to
-// the cache; index blocks are decompressed per load.
+// Captured Options are forwarded unchanged to TableReader::open, so cached
+// readers use the same comparator, compressor and filter the writer used.  The
+// resident summary and filter are charged to the cache; index blocks are read
+// and decompressed per lookup.
 //
-// The cache holds a Table* with one reference (the deleter unrefs it); callers
-// of find_table receive their own reference.  Keys are namespaced by a
-// per-TableCache id so multiple TableCaches can share one Cache.
+// A cached TableReader is kept alive while a lookup handle is outstanding, so
+// the cache may evict and delete it as soon as get() releases its handle.
 class TableCache {
   public:
     TableCache(const Options &options, std::string db_dir);
@@ -52,7 +51,7 @@ class TableCache {
                std::string_view key, std::string *value, std::string *scratch);
 
     // Returns a heap-allocated iterator over `table_number` (caller deletes).
-    // The iterator keeps the cached table alive.
+    // The iterator keeps its table reader alive independently of the cache.
     Status new_iterator(const ReadOptions &options, uint64_t table_number,
                         Iterator **iter);
 
@@ -63,14 +62,17 @@ class TableCache {
     uint64_t namespace_id() const { return namespace_id_; }
 
   private:
-    // Looks up or opens the table, returning a new reference in *out that the
-    // caller must unref().
-    Status find_table(uint64_t table_number, Table **out);
+    // Looks up or opens the table.  On success *reader is usable and *handle is
+    // the cache handle pinning it; release the handle when done.  A null handle
+    // means the cache did not take ownership, so the caller must delete the
+    // reader.
+    Status find_table(uint64_t table_number, Cache::Handle **handle,
+                      TableReader **reader);
 
     // Builds the namespaced cache key for a table number.
     std::string cache_key(uint64_t table_number) const;
 
-    // Cache deleter for a Table* cache value.
+    // Cache deleter for a TableReader* cache value.
     static void delete_entry(std::string_view key, void *value);
 
     Options options_;

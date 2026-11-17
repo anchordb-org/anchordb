@@ -96,32 +96,22 @@ target_sources(anchordb
         src/util/thread_pool.h
         src/cache/arc.h
         src/cache/arc.cc
-        src/sstable/empty_iter.h
-        src/sstable/data_record.h
-        src/sstable/data_record.cc
-        src/sstable/record_writer.h
-        src/sstable/record_writer.cc
-        src/sstable/record_reader.h
-        src/sstable/record_reader.cc
-        src/sstable/record_buffer_reader.h
-        src/sstable/record_buffer_reader.cc
-        src/sstable/iterator_wrapper.h
         src/port/port.h
         src/port/port_thread.h
         src/port/port_stdcxx.h
-        src/sstable/empty_iter.h
-        src/sstable/idx_block_reader.cc
-        src/sstable/idx_block_reader.h
-        src/sstable/idx_block_writer.cc
-        src/sstable/idx_block_writer.h
-        src/sstable/idx_table_builder.cc
-        src/sstable/idx_table_builder.h
+        src/sstable/data_record.h
+        src/sstable/data_record.cc
         src/sstable/filter.cc
         src/sstable/filter.h
+        src/sstable/index_block.cc
+        src/sstable/index_block.h
         src/sstable/summary.cc
         src/sstable/summary.h
-        src/sstable/table.cc
-        src/sstable/table.h
+        src/sstable/table_file_set.h
+        src/sstable/table_builder.cc
+        src/sstable/table_builder.h
+        src/sstable/table_reader.cc
+        src/sstable/table_reader.h
         src/sstable/table_cache.cc
         src/sstable/table_cache.h
 )

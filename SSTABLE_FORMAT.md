@@ -3,7 +3,7 @@
 Binary layout of the SSTable data path (`.data`, `.index`, `.summary`,
 `.filter`) and the WiscKey value log (`.vLog`). This document is a
 specification of the current implementation; the normative source of truth is
-the code listed in [References](#references).
+the code written throughout the codebase.
 
 ## Conventions
 
@@ -34,9 +34,10 @@ the code listed in [References](#references).
 | vLog files    | Concatenated data records whose `EntryType` is `Blob`               |
 
 `data.bin` and the vLog use the **same record format**. An index slot addresses
-an inline record by `(offset, size)` into `data.bin`, but a blob's index slot
-addresses only the value bytes inside a vLog record by
-`(file_id, value_offset, value_size)` — never the record header.
+an inline record by `(offset, size)` into `data.bin`, and a blob's index slot
+addresses the complete vLog record by `(file_id, record_offset, record_size)`.
+In both cases `offset` points at the start of the record header and `size` is
+the full encoded record size.
 
 ---
 
@@ -128,22 +129,21 @@ starts at block-local offset `8 + i * 19`.
  0                  2      3         7        11                     19
 ```
 
-| Offset | Width | Field                | Description                                                           |
-| ------ | ----- | -------------------- | --------------------------------------------------------------------- |
-| 0      | 2     | `key_local_offset`   | Block-local offset of the payload entry (`key_len` field)             |
-| 2      | 1     | `type`               | `EntryType`                                                           |
-| 3      | 4     | `file_id`            | vLog file id for `Blob`; always 0 for inline/tombstone                |
-| 7      | 4     | `size`               | Encoded data-record size for inline; value size for blob              |
-| 11     | 8     | `data_global_offset` | Inline: absolute offset in `data.bin`. Blob: value offset in the vLog |
+| Offset | Width | Field                | Description                                                                     |
+| ------ | ----- | -------------------- | ------------------------------------------------------------------------------- |
+| 0      | 2     | `key_local_offset`   | Block-local offset of the payload entry (`key_len` field)                       |
+| 2      | 1     | `type`               | `EntryType`                                                                     |
+| 3      | 4     | `file_id`            | vLog file id for `Blob`; always 0 for inline/tombstone                          |
+| 7      | 4     | `size`               | Full encoded record size for inline and blob entries                            |
+| 11     | 8     | `data_global_offset` | Inline: absolute offset in `data.bin`. Blob: absolute record offset in the vLog |
 
 The fields above form `ValueHandle { type, file_id, offset, size }`.
 For inline entries `(data_global_offset, size)` covers the whole encoded data
 record in `data.bin`. For blob entries `(file_id, data_global_offset, size)`
-covers only the value bytes inside the vLog record.
+covers the whole encoded record in the vLog, starting at its header.
 
-> **Gotcha:** the memtable `BlobHandle` in `src/db/db_format.h` uses
-> `(offset, size)` inclusive of the vLog record header, while the index
-> `ValueHandle` uses value-only offset/size. They are not interchangeable.
+The memtable `BlobHandle` in `src/db/db_format.h` uses the same convention:
+`(offset, size)` starts at the record header and covers the full encoded record.
 
 ### Backward payload entry
 
@@ -270,16 +270,3 @@ Notes:
 - When no filter is configured, no filter file is written.
 
 ---
-
-## References
-
-| Topic                | Source                                                                          |
-| -------------------- | ------------------------------------------------------------------------------- |
-| Fixed-width encoding | `src/util/coding.h`                                                             |
-| Entry types / keys   | `src/db/db_format.h`                                                            |
-| Data record          | `src/sstable/data_record.{h,cc}`                                                |
-| Record I/O           | `src/sstable/record_writer.h`, `record_reader.{h,cc}`, `record_buffer_reader.h` |
-| Index block          | `src/sstable/idx_block_writer.{h,cc}`, `idx_block_reader.{h,cc}`                |
-| Index assembly       | `src/sstable/idx_table_builder.{h,cc}`                                          |
-| Summary index        | `src/sstable/summary.{h,cc}`                                                    |
-| Filter               | `src/sstable/filter.{h,cc}`, `include/anchordb/filter.h`                        |

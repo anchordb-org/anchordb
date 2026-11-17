@@ -17,8 +17,6 @@
 #include "anchordb/env.h"
 #include "file/filename.h"
 #include "sstable/data_record.h"
-#include "sstable/record_buffer_reader.h"
-#include "sstable/record_writer.h"
 #include <cassert>
 #include <cstdint>
 #include <cstring>

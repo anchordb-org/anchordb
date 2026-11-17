@@ -263,7 +263,8 @@ class InternalKeyComparator {
 };
 
 // Value-log entries are addressed directly by the index: the index slot stores
-// the vLog file id, the byte offset within that file, and the value size, so no
-// intermediate pointer is written into the data record.
+// the vLog file id, the byte offset of the complete record within that file,
+// and the full encoded record size, so no intermediate pointer is written into
+// the data record.
 
 } // namespace ANCHORDB_NAMESPACE

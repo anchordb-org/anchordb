@@ -31,10 +31,9 @@ namespace ANCHORDB_NAMESPACE {
 inline constexpr size_t kSummaryHeaderSize = 2 * sizeof(uint32_t); // 8 bytes
 
 // Fixed on-disk sizes of a summary index entry's non-key fields.
-inline constexpr size_t kSummaryKeyLenSize = sizeof(uint32_t); // 4 bytes
-inline constexpr size_t kSummaryOffsetSize = sizeof(uint64_t); // 8 bytes
-inline constexpr size_t kSummaryCompressedSizeSize =
-    sizeof(uint32_t); // 4 bytes
+inline constexpr size_t kSummaryKeyLenSize = sizeof(uint32_t);         // 4 bytes
+inline constexpr size_t kSummaryOffsetSize = sizeof(uint64_t);         // 8 bytes
+inline constexpr size_t kSummaryCompressedSizeSize = sizeof(uint32_t); // 4 bytes
 
 // One decoded summary index entry.  `key` is a view into the buffer the reader
 // was constructed from and must not outlive it.
@@ -67,8 +66,7 @@ class SummaryBuilder {
     // stored verbatim).  Both are written as the summary header. `max_key_size`
     // bounds the separator keys stored in the summary and must match the limit
     // used for the corresponding index blocks.
-    explicit SummaryBuilder(uint32_t block_size, uint32_t compressor_id = 0,
-                            size_t max_key_size = kDefaultMaxKeySize);
+    explicit SummaryBuilder(uint32_t block_size, uint32_t compressor_id = 0, size_t max_key_size = kDefaultMaxKeySize);
 
     SummaryBuilder(const SummaryBuilder &) = delete;
     SummaryBuilder &operator=(const SummaryBuilder &) = delete;
@@ -92,8 +90,7 @@ class SummaryBuilder {
     // `compressed_size` is the on-disk byte length of the block at
     // block_offset.  Returns false (and writes nothing) if the key exceeds
     // max_key_size().
-    bool add(std::string_view key, uint64_t block_offset,
-             uint32_t compressed_size);
+    bool add(std::string_view key, uint64_t block_offset, uint32_t compressed_size);
 
     // Returns the encoded summary buffer.  Valid until the next mutation.
     std::string_view finish() const { return buffer_; }
@@ -121,8 +118,7 @@ class SummaryBuilder {
 // it.  Ordering uses the supplied Comparator (null falls back to bytewise).
 class SummaryReader {
   public:
-    explicit SummaryReader(std::string_view buffer,
-                                Comparator comparator = Comparator{});
+    explicit SummaryReader(std::string_view buffer, Comparator comparator = Comparator{});
 
     SummaryReader(const SummaryReader &) = delete;
     SummaryReader &operator=(const SummaryReader &) = delete;
@@ -145,8 +141,7 @@ class SummaryReader {
 
     // As above, also reporting the block's on-disk (compressed) size.  Either
     // output pointer may be null.
-    bool seek(std::string_view target, uint64_t *block_offset,
-              uint32_t *compressed_size) const;
+    bool seek(std::string_view target, uint64_t *block_offset, uint32_t *compressed_size) const;
 
     // Index of the first entry whose key is >= target, or size() when every
     // stored key is smaller (or the buffer is invalid).

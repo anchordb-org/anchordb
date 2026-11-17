@@ -25,9 +25,7 @@
 namespace ANCHORDB_NAMESPACE {
 
 namespace {
-inline uint32_t bloom_hash(std::string_view key) {
-    return murmurhash2_32(key.data(), key.size(), 0xbc9f1d34);
-}
+inline uint32_t bloom_hash(std::string_view key) { return murmurhash2_32(key.data(), key.size(), 0xbc9f1d34); }
 } // namespace
 
 struct BloomFilterState {
@@ -35,16 +33,10 @@ struct BloomFilterState {
     size_t k;
 };
 
-inline const char *bloom_name(const void *state_ptr) {
-    return "anchordb.BuiltinBloomFilter";
-}
-void bloom_create(const void *state_ptr, const std::string_view *keys, size_t n,
-                  std::string *dst);
-bool bloom_match(const void *state_ptr, std::string_view key,
-                 std::string_view bloom_filter);
-inline void bloom_destroy(const void *state_ptr) {
-    delete static_cast<const BloomFilterState *>(state_ptr);
-}
+inline const char *bloom_name(const void *state_ptr) { return "anchordb.BuiltinBloomFilter"; }
+void bloom_create(const void *state_ptr, const std::string_view *keys, size_t n, std::string *dst);
+bool bloom_match(const void *state_ptr, std::string_view key, std::string_view bloom_filter);
+inline void bloom_destroy(const void *state_ptr) { delete static_cast<const BloomFilterState *>(state_ptr); }
 
 inline Filter make_bloom_filter(size_t bits_per_key) {
     size_t bits_per_key_ = (bits_per_key > 0) ? bits_per_key : 10;
@@ -54,8 +46,7 @@ inline Filter make_bloom_filter(size_t bits_per_key) {
     if (k_ > 30) k_ = 30;
     auto *state = new BloomFilterState{bits_per_key_, k_};
 
-    return Filter{state, &bloom_name, &bloom_create, &bloom_match,
-                  &bloom_destroy};
+    return Filter{state, &bloom_name, &bloom_create, &bloom_match, &bloom_destroy};
 }
 
 } // namespace ANCHORDB_NAMESPACE

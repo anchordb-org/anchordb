@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "sstable/table_reader.h"
 #include "anchordb/env.h"
 #include "file/filename.h"
 #include "sstable/data_record.h"
+#include "sstable/table_reader.h"
 #include <cassert>
 #include <cstring>
 #include <string>
@@ -37,8 +37,7 @@ constexpr uint64_t kMaxFilterFileSize = 64ull * 1024 * 1024;
 constexpr size_t kTableCacheEntryOverhead = 256;
 
 // Reads exactly `n` bytes at `offset` into *buf and points *out at them.
-Status read_exact(RandomAccessFileReader *reader, uint64_t offset, size_t n,
-                  std::string *buf, std::string_view *out) {
+Status read_exact(RandomAccessFileReader *reader, uint64_t offset, size_t n, std::string *buf, std::string_view *out) {
     *out = std::string_view();
     if (n == 0) {
         buf->clear();
@@ -49,13 +48,8 @@ Status read_exact(RandomAccessFileReader *reader, uint64_t offset, size_t n,
     std::string_view view;
     Status s = reader->read(offset, n, &view, buf->data());
     if (!s.is_ok()) { return s; }
-    if (view.size() < n) {
-        return Status::corruption("table reader: short read",
-                                  std::to_string(view.size()));
-    }
-    if (view.data() != buf->data()) {
-        std::memmove(buf->data(), view.data(), n);
-    }
+    if (view.size() < n) { return Status::corruption("table reader: short read", std::to_string(view.size())); }
+    if (view.data() != buf->data()) { std::memmove(buf->data(), view.data(), n); }
     *out = std::string_view(buf->data(), n);
     return Status::ok();
 }
@@ -67,15 +61,12 @@ Status decode_single_record(std::string_view bytes, ParsedDataRecord *result) {
     Status s = reader.next(result, &done);
     if (!s.is_ok()) { return s; }
     if (done) { return Status::corruption("table reader: missing record"); }
-    if (!reader.done()) {
-        return Status::corruption("table reader: trailing bytes after record");
-    }
+    if (!reader.done()) { return Status::corruption("table reader: trailing bytes after record"); }
     return Status::ok();
 }
 
 // First slot of `reader` whose key is >= target (lower_bound within a block).
-size_t lower_bound(const Comparator &cmp, const IndexBlockReader &reader,
-                   std::string_view target) {
+size_t lower_bound(const Comparator &cmp, const IndexBlockReader &reader, std::string_view target) {
     size_t lo = 0;
     size_t hi = reader.size();
     while (lo < hi) {
@@ -106,26 +97,17 @@ void TableReader::unref() {
 }
 
 size_t TableReader::cache_charge() const {
-    return summary_buffer_.size() + filter_buffer_.size() +
-           kTableCacheEntryOverhead;
+    return summary_buffer_.size() + filter_buffer_.size() + kTableCacheEntryOverhead;
 }
 
-Status TableReader::open(const Options &options, const TableFileSet &files,
-                         std::string db_dir, TableReader **result) {
-    if (result == nullptr) {
-        return Status::invalid_argument("TableReader::open: null result");
-    }
-    if (options.env == nullptr) {
-        return Status::invalid_argument(
-            "TableReader::open: options.env is null");
-    }
+Status TableReader::open(const Options &options, const TableFileSet &files, std::string db_dir, TableReader **result) {
+    if (result == nullptr) { return Status::invalid_argument("TableReader::open: null result"); }
+    if (options.env == nullptr) { return Status::invalid_argument("TableReader::open: options.env is null"); }
 
     TableReader *reader = new TableReader();
     reader->env_ = options.env;
     reader->comparator_ = options.comparator;
-    if (reader->comparator_.compare == nullptr) {
-        reader->comparator_ = new_byte_wise_comparator();
-    }
+    if (reader->comparator_.compare == nullptr) { reader->comparator_ = new_byte_wise_comparator(); }
     reader->compressor_ = options.compressor;
     reader->filter_spec_ = options.filter;
     reader->db_dir_ = std::move(db_dir);
@@ -143,8 +125,7 @@ Status TableReader::open(const Options &options, const TableFileSet &files,
 
 Status TableReader::init_(const TableFileSet &files) {
     if (files.data.empty() || files.index.empty() || files.summary.empty()) {
-        return Status::invalid_argument(
-            "TableReader: missing data, index or summary file name");
+        return Status::invalid_argument("TableReader: missing data, index or summary file name");
     }
 
     uint64_t summary_size = 0;
@@ -157,8 +138,7 @@ Status TableReader::init_(const TableFileSet &files) {
     s = env_->get_file_size(files.data, &data_size);
     if (!s.is_ok()) { return s; }
     if (summary_size > kMaxSummaryFileSize) {
-        return Status::corruption("table reader: summary file too large",
-                                  std::to_string(summary_size));
+        return Status::corruption("table reader: summary file too large", std::to_string(summary_size));
     }
 
     s = env_->new_random_access_file_reader(files.index, &index_reader_);
@@ -172,15 +152,12 @@ Status TableReader::init_(const TableFileSet &files) {
     s = env_->new_random_access_file_reader(files.summary, &summary_reader);
     if (!s.is_ok()) { return s; }
     std::string_view summary_view;
-    s = read_exact(summary_reader, 0, static_cast<size_t>(summary_size),
-                   &summary_buffer_, &summary_view);
+    s = read_exact(summary_reader, 0, static_cast<size_t>(summary_size), &summary_buffer_, &summary_view);
     delete summary_reader;
     if (!s.is_ok()) { return s; }
 
     summary_ = new SummaryReader(summary_buffer_, comparator_);
-    if (!summary_->valid()) {
-        return Status::corruption("table reader: invalid summary index");
-    }
+    if (!summary_->valid()) { return Status::corruption("table reader: invalid summary index"); }
 
     // The summary records which codec compressed the index blocks.  Reading a
     // table with any other codec (or with compression disabled) would silently
@@ -188,57 +165,45 @@ Status TableReader::init_(const TableFileSet &files) {
     const uint32_t stored_compressor_id = summary_->compressor_id();
     if (stored_compressor_id != compressor_.id) {
         return Status::corruption("table reader: compressor id mismatch",
-                                  std::to_string(stored_compressor_id) +
-                                      " != " + std::to_string(compressor_.id));
+                                  std::to_string(stored_compressor_id) + " != " + std::to_string(compressor_.id));
     }
     if (stored_compressor_id != 0 &&
-        (compressor_.uncompress == nullptr ||
-         compressor_.get_uncompressed_length == nullptr)) {
-        return Status::corruption(
-            "table reader: compressor unavailable for table");
+        (compressor_.uncompress == nullptr || compressor_.get_uncompressed_length == nullptr)) {
+        return Status::corruption("table reader: compressor unavailable for table");
     }
 
     // The summary header pins the index-block segment size for this table, and
     // its entries are the source of truth for the block layout.  Validate that
     // every entry maps inside index.bin before any read uses it.
     block_size_ = summary_->block_size();
-    if (block_size_ == 0) {
-        return Status::corruption("table reader: zero index block size");
-    }
+    if (block_size_ == 0) { return Status::corruption("table reader: zero index block size"); }
     for (size_t i = 0; i < summary_->size(); ++i) {
         const SummaryEntry &entry = summary_->entry(i);
         if (entry.compressed_size == 0 || entry.block_offset > index_size ||
             entry.compressed_size > index_size - entry.block_offset) {
-            return Status::corruption(
-                "table reader: summary entry out of range",
-                std::to_string(entry.block_offset));
+            return Status::corruption("table reader: summary entry out of range", std::to_string(entry.block_offset));
         }
     }
 
     // The filter is optional: a missing or unreadable filter simply disables
     // filtering instead of failing the open.
-    const bool filter_configured =
-        filter_spec_.key_may_match != nullptr && filter_spec_.name != nullptr;
+    const bool filter_configured = filter_spec_.key_may_match != nullptr && filter_spec_.name != nullptr;
     if (filter_configured && !files.filter.empty()) {
         uint64_t filter_size = 0;
         Status fs = env_->get_file_size(files.filter, &filter_size);
         if (fs.is_ok() && filter_size > 0) {
             if (filter_size > kMaxFilterFileSize) {
-                return Status::corruption("table reader: filter file too large",
-                                          std::to_string(filter_size));
+                return Status::corruption("table reader: filter file too large", std::to_string(filter_size));
             }
             RandomAccessFileReader *filter_reader = nullptr;
-            fs = env_->new_random_access_file_reader(files.filter,
-                                                     &filter_reader);
+            fs = env_->new_random_access_file_reader(files.filter, &filter_reader);
             if (!fs.is_ok()) { return fs; }
             std::string_view filter_view;
-            fs = read_exact(filter_reader, 0, static_cast<size_t>(filter_size),
-                            &filter_buffer_, &filter_view);
+            fs = read_exact(filter_reader, 0, static_cast<size_t>(filter_size), &filter_buffer_, &filter_view);
             delete filter_reader;
             if (!fs.is_ok()) { return fs; }
 
-            FilterReader *parsed =
-                new FilterReader(filter_spec_, filter_buffer_);
+            FilterReader *parsed = new FilterReader(filter_spec_, filter_buffer_);
             if (parsed->valid()) {
                 filter_ = parsed;
             } else {
@@ -250,15 +215,11 @@ Status TableReader::init_(const TableFileSet &files) {
     return Status::ok();
 }
 
-Status TableReader::get(const ReadOptions &options, std::string_view key,
-                        std::string *value, std::string *scratch) const {
+Status TableReader::get(const ReadOptions &options, std::string_view key, std::string *value,
+                        std::string *scratch) const {
     (void)options;
-    if (value == nullptr) {
-        return Status::invalid_argument("TableReader::get: null value");
-    }
-    if (scratch == nullptr) {
-        return Status::invalid_argument("TableReader::get: null scratch");
-    }
+    if (value == nullptr) { return Status::invalid_argument("TableReader::get: null value"); }
+    if (scratch == nullptr) { return Status::invalid_argument("TableReader::get: null scratch"); }
 
     // A definite filter miss means the key is absent, so skip all I/O.
     if (filter_ != nullptr && !filter_->key_may_match(key)) {
@@ -266,33 +227,25 @@ Status TableReader::get(const ReadOptions &options, std::string_view key,
     }
 
     const size_t block_index = summary_->lower_bound(key);
-    if (block_index >= summary_->size()) {
-        return Status::not_found("key not in table range", std::string(key));
-    }
+    if (block_index >= summary_->size()) { return Status::not_found("key not in table range", std::string(key)); }
     const SummaryEntry &entry = summary_->entry(block_index);
 
     std::string stored_buf;
     std::string plain_buf;
     std::string_view block;
-    Status s = read_index_block_(entry.block_offset, entry.compressed_size,
-                                 &stored_buf, &plain_buf, &block);
+    Status s = read_index_block_(entry.block_offset, entry.compressed_size, &stored_buf, &plain_buf, &block);
     if (!s.is_ok()) { return s; }
 
     IndexBlockReader reader(block, block_size_);
-    if (!reader.valid()) {
-        return Status::corruption("table reader: invalid index block");
-    }
+    if (!reader.valid()) { return Status::corruption("table reader: invalid index block"); }
 
     const size_t slot = lower_bound(comparator_, reader, key);
-    if (slot >= reader.size() ||
-        comparator_.compare(reader.key(slot), key) != 0) {
+    if (slot >= reader.size() || comparator_.compare(reader.key(slot), key) != 0) {
         return Status::not_found("key not found", std::string(key));
     }
 
     const ValueHandle handle = reader.entry(slot).handle;
-    if (handle.type == EntryType::Blob) {
-        return read_blob_record_(handle, key, value, scratch);
-    }
+    if (handle.type == EntryType::Blob) { return read_blob_record_(handle, key, value, scratch); }
     return read_inline_record_(handle, key, value, scratch);
 }
 
@@ -303,8 +256,7 @@ Status TableReader::get(const ReadOptions &options, std::string_view key,
 class TableIterator : public Iterator {
   public:
     TableIterator(TableReader *owner, const ReadOptions &options)
-        : owner_(owner), comparator_(owner->comparator_),
-          block_count_(owner->summary_->size()) {
+        : owner_(owner), comparator_(owner->comparator_), block_count_(owner->summary_->size()) {
         (void)options;
         owner_->ref();
     }
@@ -400,9 +352,7 @@ class TableIterator : public Iterator {
     Status status() const override { return status_; }
 
   private:
-    bool visible(size_t slot) const {
-        return block_reader_->entry(slot).handle.type != EntryType::Tombstone;
-    }
+    bool visible(size_t slot) const { return block_reader_->entry(slot).handle.type != EntryType::Tombstone; }
 
     void invalidate() {
         valid_ = false;
@@ -421,8 +371,7 @@ class TableIterator : public Iterator {
         const SummaryEntry &entry = owner_->summary_->entry(block_index);
         std::string_view block;
         Status s =
-            owner_->read_index_block_(entry.block_offset, entry.compressed_size,
-                                      &stored_buf_, &plain_buf_, &block);
+            owner_->read_index_block_(entry.block_offset, entry.compressed_size, &stored_buf_, &plain_buf_, &block);
         if (!s.is_ok()) {
             status_ = s;
             invalidate();
@@ -442,11 +391,9 @@ class TableIterator : public Iterator {
 
         Status s;
         if (entry.handle.type == EntryType::Blob) {
-            s = owner_->read_blob_record_(entry.handle, key_, &value_buf_,
-                                          &scratch_);
+            s = owner_->read_blob_record_(entry.handle, key_, &value_buf_, &scratch_);
         } else {
-            s = owner_->read_inline_record_(entry.handle, key_, &value_buf_,
-                                            &scratch_);
+            s = owner_->read_inline_record_(entry.handle, key_, &value_buf_, &scratch_);
         }
         if (!s.is_ok()) {
             status_ = s;
@@ -551,153 +498,108 @@ class TableIterator : public Iterator {
 };
 
 Iterator *TableReader::new_iterator(const ReadOptions &options) {
-    if (summary_ == nullptr || !summary_->valid()) {
-        return new_error_iterator(Status::corruption("invalid table"));
-    }
+    if (summary_ == nullptr || !summary_->valid()) { return new_error_iterator(Status::corruption("invalid table")); }
     if (summary_->empty()) { return new_empty_iterator(); }
     return new TableIterator(this, options);
 }
 
-Status TableReader::read_index_block_(uint64_t block_offset,
-                                      uint32_t compressed_size,
-                                      std::string *stored_buf,
-                                      std::string *plain_buf,
-                                      std::string_view *out) const {
+Status TableReader::read_index_block_(uint64_t block_offset, uint32_t compressed_size, std::string *stored_buf,
+                                      std::string *plain_buf, std::string_view *out) const {
     *out = std::string_view();
-    if (block_offset > index_file_size_ ||
-        compressed_size > index_file_size_ - block_offset) {
-        return Status::corruption("table reader: index block out of range",
-                                  std::to_string(block_offset));
+    if (block_offset > index_file_size_ || compressed_size > index_file_size_ - block_offset) {
+        return Status::corruption("table reader: index block out of range", std::to_string(block_offset));
     }
 
     std::string_view stored;
-    Status s = read_exact(index_reader_, block_offset, compressed_size,
-                          stored_buf, &stored);
+    Status s = read_exact(index_reader_, block_offset, compressed_size, stored_buf, &stored);
     if (!s.is_ok()) { return s; }
 
     // A zero compressor id means the block is stored verbatim regardless of
     // the function pointers the caller supplied.
     if (compressor_.id == 0 || compressor_.uncompress == nullptr) {
         if (stored.size() != block_size_) {
-            return Status::corruption(
-                "table reader: index block not block sized",
-                std::to_string(stored.size()));
+            return Status::corruption("table reader: index block not block sized", std::to_string(stored.size()));
         }
         *out = stored;
         return Status::ok();
     }
     if (compressor_.get_uncompressed_length == nullptr) {
-        return Status::corruption(
-            "table reader: compressor lacks length reporting");
+        return Status::corruption("table reader: compressor lacks length reporting");
     }
 
     size_t uncompressed_size = 0;
-    if (!compressor_.get_uncompressed_length(stored.data(), stored.size(),
-                                             &uncompressed_size)) {
-        return Status::corruption(
-            "table reader: bad compressed index block length");
+    if (!compressor_.get_uncompressed_length(stored.data(), stored.size(), &uncompressed_size)) {
+        return Status::corruption("table reader: bad compressed index block length");
     }
     if (uncompressed_size != block_size_) {
-        return Status::corruption(
-            "table reader: index block not block sized after decompression",
-            std::to_string(uncompressed_size));
+        return Status::corruption("table reader: index block not block sized after decompression",
+                                  std::to_string(uncompressed_size));
     }
     plain_buf->resize(uncompressed_size);
-    if (!compressor_.uncompress(stored.data(), stored.size(),
-                                plain_buf->data())) {
-        return Status::corruption(
-            "table reader: index block decompression failed");
+    if (!compressor_.uncompress(stored.data(), stored.size(), plain_buf->data())) {
+        return Status::corruption("table reader: index block decompression failed");
     }
     *out = std::string_view(plain_buf->data(), uncompressed_size);
     return Status::ok();
 }
 
-Status TableReader::read_inline_record_(const ValueHandle &handle,
-                                        std::string_view expected_key,
-                                        std::string *value,
+Status TableReader::read_inline_record_(const ValueHandle &handle, std::string_view expected_key, std::string *value,
                                         std::string *scratch) const {
     if (handle.type == EntryType::Blob) {
-        return Status::invalid_argument(
-            "table reader: blob handle passed to inline reader");
+        return Status::invalid_argument("table reader: blob handle passed to inline reader");
     }
     if (handle.size < kDataRecordHeaderSize) {
-        return Status::corruption("table reader: data record size too small",
-                                  std::to_string(handle.size));
+        return Status::corruption("table reader: data record size too small", std::to_string(handle.size));
     }
-    if (handle.offset >= data_file_size_ ||
-        handle.size > data_file_size_ - handle.offset) {
-        return Status::corruption("table reader: data record out of range",
-                                  std::to_string(handle.offset));
+    if (handle.offset >= data_file_size_ || handle.size > data_file_size_ - handle.offset) {
+        return Status::corruption("table reader: data record out of range", std::to_string(handle.offset));
     }
 
     std::string_view view;
-    Status s =
-        read_exact(data_reader_, handle.offset, handle.size, scratch, &view);
+    Status s = read_exact(data_reader_, handle.offset, handle.size, scratch, &view);
     if (!s.is_ok()) { return s; }
 
     ParsedDataRecord record;
     s = decode_single_record(view, &record);
     if (!s.is_ok()) { return s; }
-    if (record.key != expected_key) {
-        return Status::corruption("table reader: data record key mismatch");
-    }
-    if (record.type != handle.type) {
-        return Status::corruption(
-            "table reader: index/data record metadata mismatch");
-    }
-    if (record.type == EntryType::Tombstone) {
-        return Status::not_found("tombstone", std::string(expected_key));
-    }
+    if (record.key != expected_key) { return Status::corruption("table reader: data record key mismatch"); }
+    if (record.type != handle.type) { return Status::corruption("table reader: index/data record metadata mismatch"); }
+    if (record.type == EntryType::Tombstone) { return Status::not_found("tombstone", std::string(expected_key)); }
     value->assign(record.value.data(), record.value.size());
     return Status::ok();
 }
 
-Status TableReader::read_blob_record_(const ValueHandle &handle,
-                                      std::string_view expected_key,
-                                      std::string *value,
+Status TableReader::read_blob_record_(const ValueHandle &handle, std::string_view expected_key, std::string *value,
                                       std::string *scratch) const {
     if (handle.type != EntryType::Blob) {
-        return Status::invalid_argument(
-            "table reader: non-blob handle passed to blob reader");
+        return Status::invalid_argument("table reader: non-blob handle passed to blob reader");
     }
     if (handle.size < kDataRecordHeaderSize) {
-        return Status::corruption("table reader: vLog record size too small",
-                                  std::to_string(handle.size));
+        return Status::corruption("table reader: vLog record size too small", std::to_string(handle.size));
     }
 
     VlogDescriptor descriptor;
     Status s = get_vlog_descriptor_(handle.file_id, &descriptor);
     if (!s.is_ok()) { return s; }
-    if (handle.offset > descriptor.size ||
-        handle.size > descriptor.size - handle.offset) {
-        return Status::corruption("table reader: vLog record out of range",
-                                  std::to_string(handle.offset));
+    if (handle.offset > descriptor.size || handle.size > descriptor.size - handle.offset) {
+        return Status::corruption("table reader: vLog record out of range", std::to_string(handle.offset));
     }
 
     std::string_view view;
-    s = read_exact(descriptor.reader, handle.offset, handle.size, scratch,
-                   &view);
+    s = read_exact(descriptor.reader, handle.offset, handle.size, scratch, &view);
     if (!s.is_ok()) { return s; }
 
     ParsedDataRecord record;
     s = decode_single_record(view, &record);
     if (!s.is_ok()) { return s; }
-    if (!record.is_blob()) {
-        return Status::corruption("table reader: vLog record is not a blob");
-    }
-    if (record.key != expected_key) {
-        return Status::corruption("table reader: vLog record key mismatch");
-    }
+    if (!record.is_blob()) { return Status::corruption("table reader: vLog record is not a blob"); }
+    if (record.key != expected_key) { return Status::corruption("table reader: vLog record key mismatch"); }
     value->assign(record.value.data(), record.value.size());
     return Status::ok();
 }
 
-Status TableReader::get_vlog_descriptor_(uint32_t file_id,
-                                         VlogDescriptor *out) const {
-    if (out == nullptr) {
-        return Status::invalid_argument(
-            "table reader: null vLog descriptor output");
-    }
+Status TableReader::get_vlog_descriptor_(uint32_t file_id, VlogDescriptor *out) const {
+    if (out == nullptr) { return Status::invalid_argument("table reader: null vLog descriptor output"); }
 
     std::lock_guard<std::mutex> lock(vlog_mutex_);
     const auto existing = vlog_files_.find(file_id);

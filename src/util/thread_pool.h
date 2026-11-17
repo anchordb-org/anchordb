@@ -54,8 +54,7 @@ class ThreadPool {
 
     // Constructs a pool with `thread_count` worker threads. A count of zero
     // falls back to default_thread_count().
-    explicit ThreadPool(size_t thread_count = default_thread_count())
-        : stop_(false), active_workers_(0) {
+    explicit ThreadPool(size_t thread_count = default_thread_count()) : stop_(false), active_workers_(0) {
         if (thread_count == 0) { thread_count = default_thread_count(); }
 
         workers_.reserve(thread_count);
@@ -122,15 +121,12 @@ class ThreadPool {
     size_t thread_count() const noexcept { return workers_.size(); }
 
     // Lock-free check for the number of tasks currently executing.
-    size_t active_workers() const noexcept {
-        return active_workers_.load(std::memory_order_relaxed);
-    }
+    size_t active_workers() const noexcept { return active_workers_.load(std::memory_order_relaxed); }
 
     // Returns true when no tasks are queued and none are executing.
     bool is_idle() const {
         std::lock_guard<std::mutex> lock(queue_mutex_);
-        return tasks_.empty() &&
-               active_workers_.load(std::memory_order_relaxed) == 0;
+        return tasks_.empty() && active_workers_.load(std::memory_order_relaxed) == 0;
     }
 
   private:

@@ -27,10 +27,8 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-WALReader::WALReader(SequentialFileReader *reader, size_t max_frame_payload,
-                     bool verify_checksums)
-    : reader_(reader), max_frame_payload_(max_frame_payload),
-      verify_checksums_(verify_checksums) {
+WALReader::WALReader(SequentialFileReader *reader, size_t max_frame_payload, bool verify_checksums)
+    : reader_(reader), max_frame_payload_(max_frame_payload), verify_checksums_(verify_checksums) {
     if (max_frame_payload_ == 0) { max_frame_payload_ = 1; }
     if (max_frame_payload_ > UINT32_MAX) { max_frame_payload_ = UINT32_MAX; }
 }
@@ -57,20 +55,15 @@ Status WALReader::read_file_header_(bool *empty) {
         *empty = true;
         return Status::ok();
     }
-    if (view.size() < kWALFileHeaderSize) {
-        return Status::corruption("wal: truncated file header");
-    }
-    if (decode_fixed_32(view.data()) != kWALFileMagic) {
-        return Status::corruption("wal: bad file magic");
-    }
+    if (view.size() < kWALFileHeaderSize) { return Status::corruption("wal: truncated file header"); }
+    if (decode_fixed_32(view.data()) != kWALFileMagic) { return Status::corruption("wal: bad file magic"); }
     if (decode_fixed_16(view.data() + 4) != kWALFormatVersion) {
         return Status::corruption("wal: unsupported format version");
     }
     return Status::ok();
 }
 
-Status WALReader::read_frame_(uint8_t *flags, std::string_view *payload,
-                              bool *eof, std::string *scratch) {
+Status WALReader::read_frame_(uint8_t *flags, std::string_view *payload, bool *eof, std::string *scratch) {
     *payload = std::string_view();
     *eof = false;
 
@@ -94,20 +87,16 @@ Status WALReader::read_frame_(uint8_t *flags, std::string_view *payload,
         return Status::ok();
     }
 
-    if (decode_fixed_16(hview.data()) != kWALFrameMagic) {
-        return Status::corruption("wal: bad frame magic");
-    }
+    if (decode_fixed_16(hview.data()) != kWALFrameMagic) { return Status::corruption("wal: bad frame magic"); }
     const uint32_t length = decode_fixed_32(hview.data() + 2);
     const uint8_t frame_flags = static_cast<uint8_t>(hview.data()[6]);
     const uint32_t stored_crc = decode_fixed_32(hview.data() + 7);
 
     if ((frame_flags & ~kWALKnownFlags) != 0) {
-        return Status::corruption("wal: unknown frame flags",
-                                  std::to_string(frame_flags));
+        return Status::corruption("wal: unknown frame flags", std::to_string(frame_flags));
     }
     if (length > max_frame_payload_) {
-        return Status::corruption("wal: frame length exceeds maximum",
-                                  std::to_string(length));
+        return Status::corruption("wal: frame length exceeds maximum", std::to_string(length));
     }
 
     std::string_view pview;
@@ -127,9 +116,7 @@ Status WALReader::read_frame_(uint8_t *flags, std::string_view *payload,
     if (verify_checksums_) {
         uint32_t crc = value(hview.data(), 7);
         if (length > 0) { crc = extend(crc, pview.data(), pview.size()); }
-        if (crc != stored_crc) {
-            return Status::corruption("wal: frame checksum mismatch");
-        }
+        if (crc != stored_crc) { return Status::corruption("wal: frame checksum mismatch"); }
     }
 
     *flags = frame_flags;
@@ -137,8 +124,7 @@ Status WALReader::read_frame_(uint8_t *flags, std::string_view *payload,
     return Status::ok();
 }
 
-Status WALReader::read_record(std::string_view *record, bool *eof,
-                              std::string *scratch) {
+Status WALReader::read_record(std::string_view *record, bool *eof, std::string *scratch) {
     *record = std::string_view();
     *eof = false;
 
@@ -160,9 +146,7 @@ Status WALReader::read_record(std::string_view *record, bool *eof,
         Status s = read_frame_(&flags, &payload, &frame_eof, scratch);
         if (!s.is_ok()) { return s; }
         if (frame_eof) {
-            if (in_fragment_) {
-                return abort_fragment_("wal: truncated fragmented record");
-            }
+            if (in_fragment_) { return abort_fragment_("wal: truncated fragmented record"); }
             *eof = true;
             return Status::ok();
         }
@@ -173,34 +157,21 @@ Status WALReader::read_record(std::string_view *record, bool *eof,
         if (first && last) {
             // Whole record in a single frame: hand back the scratch view with
             // no extra copy.
-            if (in_fragment_) {
-                return abort_fragment_(
-                    "wal: new record started mid-fragmentation");
-            }
+            if (in_fragment_) { return abort_fragment_("wal: new record started mid-fragmentation"); }
             *record = payload;
             return Status::ok();
         }
 
         if (first) {
-            if (in_fragment_) {
-                return abort_fragment_(
-                    "wal: new record started mid-fragmentation");
-            }
+            if (in_fragment_) { return abort_fragment_("wal: new record started mid-fragmentation"); }
             fragmented_.clear();
-            if (!payload.empty()) {
-                fragmented_.append(payload.data(), payload.size());
-            }
+            if (!payload.empty()) { fragmented_.append(payload.data(), payload.size()); }
             in_fragment_ = true;
             continue;
         }
 
-        if (!in_fragment_) {
-            return Status::corruption(
-                "wal: continuation frame without an opening fragment");
-        }
-        if (!payload.empty()) {
-            fragmented_.append(payload.data(), payload.size());
-        }
+        if (!in_fragment_) { return Status::corruption("wal: continuation frame without an opening fragment"); }
+        if (!payload.empty()) { fragmented_.append(payload.data(), payload.size()); }
         if (last) {
             in_fragment_ = false;
             *record = std::string_view(fragmented_.data(), fragmented_.size());

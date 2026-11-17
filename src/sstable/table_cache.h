@@ -47,13 +47,12 @@ class TableCache {
 
     // Point lookup against table `table_number`, opening and caching the table
     // on first use.
-    Status get(const ReadOptions &options, uint64_t table_number,
-               std::string_view key, std::string *value, std::string *scratch);
+    Status get(const ReadOptions &options, uint64_t table_number, std::string_view key, std::string *value,
+               std::string *scratch);
 
     // Returns a heap-allocated iterator over `table_number` (caller deletes).
     // The iterator keeps its table reader alive independently of the cache.
-    Status new_iterator(const ReadOptions &options, uint64_t table_number,
-                        Iterator **iter);
+    Status new_iterator(const ReadOptions &options, uint64_t table_number, Iterator **iter);
 
     // Drops the cached entry for `table_number` (e.g. after compaction).
     Status erase(uint64_t table_number);
@@ -66,8 +65,7 @@ class TableCache {
     // the cache handle pinning it; release the handle when done.  A null handle
     // means the cache did not take ownership, so the caller must delete the
     // reader.
-    Status find_table(uint64_t table_number, Cache::Handle **handle,
-                      TableReader **reader);
+    Status find_table(uint64_t table_number, Cache::Handle **handle, TableReader **reader);
 
     // Builds the namespaced cache key for a table number.
     std::string cache_key(uint64_t table_number) const;

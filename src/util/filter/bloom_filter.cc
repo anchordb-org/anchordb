@@ -17,8 +17,7 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-void bloom_create(const void *state_ptr, const std::string_view *keys, size_t n,
-                  std::string *dst) {
+void bloom_create(const void *state_ptr, const std::string_view *keys, size_t n, std::string *dst) {
     if (n == 0) return;
 
     auto *state = static_cast<const BloomFilterState *>(state_ptr);
@@ -46,8 +45,7 @@ void bloom_create(const void *state_ptr, const std::string_view *keys, size_t n,
     }
 }
 
-bool bloom_match(const void *state_ptr, std::string_view key,
-                 std::string_view bloom_filter) {
+bool bloom_match(const void *state_ptr, std::string_view key, std::string_view bloom_filter) {
     const size_t len = bloom_filter.size();
     if (len < 2) return false;
 

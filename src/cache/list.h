@@ -86,9 +86,7 @@ template <typename T> class List {
         Node *prev;
         Node *next;
 
-        Node(const HashedKey &hashed_key, T data)
-            : hashed_key(hashed_key), data(data), prev(nullptr), next(nullptr) {
-        }
+        Node(const HashedKey &hashed_key, T data) : hashed_key(hashed_key), data(data), prev(nullptr), next(nullptr) {}
     };
 
   private:
@@ -116,25 +114,20 @@ template <typename T> class List {
 };
 
 template <typename T> List<T>::List(const List &other) : size_(0) {
-    for (Node *n = other.head_; n != nullptr; n = n->next) {
-        push_back(n->hashed_key, n->data);
-    }
+    for (Node *n = other.head_; n != nullptr; n = n->next) { push_back(n->hashed_key, n->data); }
 }
 
 template <typename T> List<T> &List<T>::operator=(const List &other) {
     if (this != &other) {
         clear();
-        for (Node *n = other.head_; n != nullptr; n = n->next) {
-            push_back(n->hashed_key, n->data);
-        }
+        for (Node *n = other.head_; n != nullptr; n = n->next) { push_back(n->hashed_key, n->data); }
     }
     return *this;
 }
 
 template <typename T>
 List<T>::List(List &&other) noexcept
-    : head_(other.head_), tail_(other.tail_),
-      index_map_(std::move(other.index_map_)), size_(other.size_) {
+    : head_(other.head_), tail_(other.tail_), index_map_(std::move(other.index_map_)), size_(other.size_) {
     other.head_ = nullptr;
     other.tail_ = nullptr;
     other.size_ = 0;
@@ -180,8 +173,7 @@ template <typename T> void List<T>::push_back(HashedKey key, T data) {
     index_map_.insert(key, new_node);
 }
 
-template <typename T>
-void List<T>::insert_before(HashedKey tr_key, HashedKey new_key, T data) {
+template <typename T> void List<T>::insert_before(HashedKey tr_key, HashedKey new_key, T data) {
     if (contains(new_key)) return;
 
     Node *target_node = index_map_.get(tr_key);
@@ -194,8 +186,7 @@ void List<T>::insert_before(HashedKey tr_key, HashedKey new_key, T data) {
     index_map_.insert(new_key, new_node);
 }
 
-template <typename T>
-void List<T>::insert_after(HashedKey tr_key, HashedKey new_key, T data) {
+template <typename T> void List<T>::insert_after(HashedKey tr_key, HashedKey new_key, T data) {
     if (contains(new_key)) return;
 
     Node *target_node = index_map_.get(tr_key);

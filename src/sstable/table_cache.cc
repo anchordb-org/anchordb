@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "sstable/table_cache.h"
 #include "anchordb/cache.h"
 #include "anchordb/status.h"
+#include "sstable/table_cache.h"
 #include "sstable/table_file_set.h"
 #include "util/coding.h"
 #include <string>
@@ -30,13 +30,9 @@ namespace {
 // Builds the concrete Cache implementation selected by the options.
 Cache *make_cache(const Options &options) {
     switch (options.table_cache_type) {
-    case CacheType::LIRS:
-        return new_lirs_cache(options.table_cache_size, options.active_map);
-    case CacheType::ClockPro:
-        return new_clock_pro_cache(options.table_cache_size,
-                                   options.active_map);
-    case CacheType::Arc:
-        return new_arc_cache(options.table_cache_size, options.active_map);
+    case CacheType::LIRS: return new_lirs_cache(options.table_cache_size, options.active_map);
+    case CacheType::ClockPro: return new_clock_pro_cache(options.table_cache_size, options.active_map);
+    case CacheType::Arc: return new_arc_cache(options.table_cache_size, options.active_map);
     case CacheType::LRU:
     default: return new_lru_cache(options.table_cache_size, options.active_map);
     }
@@ -45,8 +41,7 @@ Cache *make_cache(const Options &options) {
 } // namespace
 
 TableCache::TableCache(const Options &options, std::string db_dir)
-    : options_(options), db_dir_(std::move(db_dir)),
-      cache_(make_cache(options_)), namespace_id_(cache_.new_id()) {}
+    : options_(options), db_dir_(std::move(db_dir)), cache_(make_cache(options_)), namespace_id_(cache_.new_id()) {}
 
 TableCache::~TableCache() = default;
 
@@ -61,12 +56,9 @@ std::string TableCache::cache_key(uint64_t table_number) const {
     return key;
 }
 
-void TableCache::delete_entry(std::string_view, void *value) {
-    static_cast<TableReader *>(value)->unref();
-}
+void TableCache::delete_entry(std::string_view, void *value) { static_cast<TableReader *>(value)->unref(); }
 
-Status TableCache::find_table(uint64_t table_number, Cache::Handle **handle,
-                              TableReader **reader) {
+Status TableCache::find_table(uint64_t table_number, Cache::Handle **handle, TableReader **reader) {
     if (handle == nullptr || reader == nullptr) {
         return Status::invalid_argument("TableCache::find_table: null output");
     }
@@ -84,8 +76,7 @@ Status TableCache::find_table(uint64_t table_number, Cache::Handle **handle,
     Status s = TableReader::open(options_, files, db_dir_, &opened);
     if (!s.is_ok()) { return s; }
 
-    Cache::Handle *inserted =
-        cache_.insert(key, opened, opened->cache_charge(), &delete_entry);
+    Cache::Handle *inserted = cache_.insert(key, opened, opened->cache_charge(), &delete_entry);
     // A cache implementation that declines the entry returns no handle; the
     // caller then owns `opened` through the null-handle convention.
     *handle = inserted;
@@ -93,8 +84,7 @@ Status TableCache::find_table(uint64_t table_number, Cache::Handle **handle,
     return Status::ok();
 }
 
-Status TableCache::get(const ReadOptions &options, uint64_t table_number,
-                       std::string_view key, std::string *value,
+Status TableCache::get(const ReadOptions &options, uint64_t table_number, std::string_view key, std::string *value,
                        std::string *scratch) {
     Cache::Handle *handle = nullptr;
     TableReader *reader = nullptr;
@@ -112,12 +102,8 @@ Status TableCache::get(const ReadOptions &options, uint64_t table_number,
     return result;
 }
 
-Status TableCache::new_iterator(const ReadOptions &options,
-                                uint64_t table_number, Iterator **iter) {
-    if (iter == nullptr) {
-        return Status::invalid_argument(
-            "TableCache::new_iterator: null iterator output");
-    }
+Status TableCache::new_iterator(const ReadOptions &options, uint64_t table_number, Iterator **iter) {
+    if (iter == nullptr) { return Status::invalid_argument("TableCache::new_iterator: null iterator output"); }
 
     Cache::Handle *handle = nullptr;
     TableReader *reader = nullptr;

@@ -26,15 +26,11 @@ namespace {
 constexpr size_t kDefaultBitsPerKey = 10;
 } // namespace
 
-Filter new_bloom_filter(size_t bits_per_key) {
-    return make_bloom_filter(bits_per_key);
-}
+Filter new_bloom_filter(size_t bits_per_key) { return make_bloom_filter(bits_per_key); }
 
 Filter new_cuckoo_filter() { return make_cuckoo_filter(); }
 
-Filter new_ribbon_filter(size_t bits_per_key) {
-    return make_ribbon_filter(bits_per_key);
-}
+Filter new_ribbon_filter(size_t bits_per_key) { return make_ribbon_filter(bits_per_key); }
 
 Filter new_filter(FilterType type) {
     switch (type) {

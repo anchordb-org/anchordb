@@ -34,9 +34,7 @@ class ANCHORDB_EXPORT Status {
     Status() noexcept : state_(nullptr) {}
     ~Status() { delete[] state_; }
 
-    Status(const Status &rhs) {
-        state_ = (rhs.state_ == nullptr) ? nullptr : copy_state(rhs.state_);
-    }
+    Status(const Status &rhs) { state_ = (rhs.state_ == nullptr) ? nullptr : copy_state(rhs.state_); }
     Status &operator=(const Status &rhs) {
         // The following condition catches both aliasing (when this == &rhs),
         // and the common case where both rhs and *this are ok.
@@ -60,24 +58,19 @@ class ANCHORDB_EXPORT Status {
     // is the primary description; the optional `msg2` adds secondary context
     // (e.g. a key or file name) and is omitted from the printed form when
     // empty.
-    static Status not_found(std::string_view msg,
-                            std::string_view msg2 = std::string_view()) {
+    static Status not_found(std::string_view msg, std::string_view msg2 = std::string_view()) {
         return Status(Code::NotFound, msg, msg2);
     }
-    static Status corruption(std::string_view msg,
-                             std::string_view msg2 = std::string_view()) {
+    static Status corruption(std::string_view msg, std::string_view msg2 = std::string_view()) {
         return Status(Code::Corruption, msg, msg2);
     }
-    static Status not_supported(std::string_view msg,
-                                std::string_view msg2 = std::string_view()) {
+    static Status not_supported(std::string_view msg, std::string_view msg2 = std::string_view()) {
         return Status(Code::NotSupported, msg, msg2);
     }
-    static Status invalid_argument(std::string_view msg,
-                                   std::string_view msg2 = std::string_view()) {
+    static Status invalid_argument(std::string_view msg, std::string_view msg2 = std::string_view()) {
         return Status(Code::InvalidArgument, msg, msg2);
     }
-    static Status io_error(std::string_view msg,
-                           std::string_view msg2 = std::string_view()) {
+    static Status io_error(std::string_view msg, std::string_view msg2 = std::string_view()) {
         return Status(Code::IoError, msg, msg2);
     }
 
@@ -124,18 +117,9 @@ class ANCHORDB_EXPORT Status {
     std::string to_str() const;
 
   private:
-    enum class Code {
-        Ok = 0,
-        NotFound = 1,
-        Corruption = 2,
-        NotSupported = 3,
-        InvalidArgument = 4,
-        IoError = 5
-    };
+    enum class Code { Ok = 0, NotFound = 1, Corruption = 2, NotSupported = 3, InvalidArgument = 4, IoError = 5 };
 
-    Code code() const {
-        return (state_ == nullptr) ? Code::Ok : static_cast<Code>(state_[4]);
-    }
+    Code code() const { return (state_ == nullptr) ? Code::Ok : static_cast<Code>(state_[4]); }
 
     Status(Code code, std::string_view msg, std::string_view msg2);
     static const char *copy_state(const char *s);

@@ -25,7 +25,7 @@
 namespace ANCHORDB_NAMESPACE {
 
 // Ribbon-filter constants shared with the free matching function.
-inline constexpr size_t k_ribbon_width = 64; // coefficient width in bits
+inline constexpr size_t k_ribbon_width = 64;           // coefficient width in bits
 inline constexpr size_t k_ribbon_fingerprint_bits = 8; // FPR ≈ 2⁻⁸ (≈ 0.4 %)
 
 namespace {
@@ -60,25 +60,18 @@ struct RibbonState {
     size_t bits_per_key;
 };
 
-inline const char *ribbon_name(const void *state_ptr) {
-    return "anchordb.BuiltinRibbonFilter";
-}
+inline const char *ribbon_name(const void *state_ptr) { return "anchordb.BuiltinRibbonFilter"; }
 
-void ribbon_create(const void *state_ptr, const std::string_view *keys,
-                   size_t n, std::string *dst);
+void ribbon_create(const void *state_ptr, const std::string_view *keys, size_t n, std::string *dst);
 
-bool ribbon_match(const void *state_ptr, std::string_view key,
-                  std::string_view ribbon_filter);
+bool ribbon_match(const void *state_ptr, std::string_view key, std::string_view ribbon_filter);
 
-inline void ribbon_destroy(const void *state_ptr) {
-    delete static_cast<const RibbonState *>(state_ptr);
-}
+inline void ribbon_destroy(const void *state_ptr) { delete static_cast<const RibbonState *>(state_ptr); }
 
 inline Filter make_ribbon_filter(size_t bits_per_key) {
     size_t bits_per_key_ = (bits_per_key >= 2) ? bits_per_key : 10;
     auto *state = new RibbonState{bits_per_key_};
-    return Filter{state, &ribbon_name, &ribbon_create, &ribbon_match,
-                  &ribbon_destroy};
+    return Filter{state, &ribbon_name, &ribbon_create, &ribbon_match, &ribbon_destroy};
 }
 
 } // namespace ANCHORDB_NAMESPACE

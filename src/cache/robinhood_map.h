@@ -69,17 +69,11 @@ template <typename T> class RobinHoodMap {
     size_t size_;
 
     // Fast bitwise modulo (requires capacity_ to be a power of 2)
-    size_t mask_(uint64_t hash) const {
-        return static_cast<size_t>(hash & (capacity_ - 1));
-    }
+    size_t mask_(uint64_t hash) const { return static_cast<size_t>(hash & (capacity_ - 1)); }
 
-    size_t next_index_(size_t current_idx) const {
-        return (current_idx + 1) & (capacity_ - 1);
-    }
+    size_t next_index_(size_t current_idx) const { return (current_idx + 1) & (capacity_ - 1); }
 
-    static size_t round_upto_power_of_two_(size_t val) {
-        return std::bit_ceil(val);
-    }
+    static size_t round_upto_power_of_two_(size_t val) { return std::bit_ceil(val); }
 
     // Internal Robin Hood insertion core logic
     void insert_(Bucket incoming);
@@ -102,10 +96,7 @@ template <typename T> bool RobinHoodMap<T>::contains(HashedKey key) const {
         // than the bucket's DIB, the key cannot exist in the map.
         if (current_dib > buckets_[idx].dib) { return false; }
 
-        if (buckets_[idx].hashed_key.hash == key.hash &&
-            buckets_[idx].hashed_key.key == key.key) {
-            return true;
-        }
+        if (buckets_[idx].hashed_key.hash == key.hash && buckets_[idx].hashed_key.key == key.key) { return true; }
 
         idx = next_index_(idx);
         current_dib++;
@@ -125,8 +116,7 @@ template <typename T> T RobinHoodMap<T>::get(HashedKey key) const {
         // than the bucket's DIB, the key cannot exist in the map.
         if (current_dib > buckets_[idx].dib) { return T(); }
 
-        if (buckets_[idx].hashed_key.hash == key.hash &&
-            buckets_[idx].hashed_key.key == key.key) {
+        if (buckets_[idx].hashed_key.hash == key.hash && buckets_[idx].hashed_key.key == key.key) {
             return buckets_[idx].value;
         }
 
@@ -156,9 +146,7 @@ template <typename T> void RobinHoodMap<T>::insert_(Bucket incoming) {
         }
 
         // Steal the slot if we have probed farther than its occupant.
-        if (incoming.dib > buckets_[idx].dib) {
-            std::swap(incoming, buckets_[idx]);
-        }
+        if (incoming.dib > buckets_[idx].dib) { std::swap(incoming, buckets_[idx]); }
 
         // Advance probe step for displaced entry
         idx = next_index_(idx);
@@ -179,8 +167,7 @@ template <typename T> T RobinHoodMap<T>::remove(HashedKey key) {
             return T(); // Key does not exist
         }
 
-        if (buckets_[idx].hashed_key.hash == key.hash &&
-            buckets_[idx].hashed_key.key == key.key) {
+        if (buckets_[idx].hashed_key.hash == key.hash && buckets_[idx].hashed_key.key == key.key) {
             result = buckets_[idx].value;
             shift_back_(idx);
             size_--;
@@ -219,9 +206,7 @@ template <typename T> void RobinHoodMap<T>::resize_(size_t new_capacity) {
     buckets_ = std::vector<Bucket>(capacity_);
 
     for (const auto &bucket : old_buckets) {
-        if (bucket.occupied) {
-            insert_(Bucket{bucket.hashed_key, bucket.value, 0, true});
-        }
+        if (bucket.occupied) { insert_(Bucket{bucket.hashed_key, bucket.value, 0, true}); }
     }
 }
 

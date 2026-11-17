@@ -50,8 +50,7 @@ class WALReader {
     // `max_frame_payload` must be at least the writer's value; a frame claiming
     // more is rejected as corruption before any read.  Zero is clamped up to
     // one byte and values above UINT32_MAX are clamped down.
-    explicit WALReader(SequentialFileReader *reader,
-                       size_t max_frame_payload = kWALDefaultMaxFramePayload,
+    explicit WALReader(SequentialFileReader *reader, size_t max_frame_payload = kWALDefaultMaxFramePayload,
                        bool verify_checksums = true);
 
     WALReader(const WALReader &) = delete;
@@ -61,8 +60,7 @@ class WALReader {
 
     // Reads the next logical record.  See the class comment for the return
     // contract.
-    Status read_record(std::string_view *record, bool *eof,
-                       std::string *scratch);
+    Status read_record(std::string_view *record, bool *eof, std::string *scratch);
 
     // Number of physical bytes consumed from the file so far.  Best-effort
     // diagnostic metric.
@@ -75,8 +73,7 @@ class WALReader {
 
     // Reads and validates one frame.  On clean/partial end of log sets *eof and
     // returns ok; on corruption or I/O error returns non-ok.
-    Status read_frame_(uint8_t *flags, std::string_view *payload, bool *eof,
-                       std::string *scratch);
+    Status read_frame_(uint8_t *flags, std::string_view *payload, bool *eof, std::string *scratch);
 
     // Clears any in-progress reassembly and returns a corruption status.
     Status abort_fragment_(std::string_view msg);

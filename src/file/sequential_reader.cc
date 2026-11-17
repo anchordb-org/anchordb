@@ -22,21 +22,17 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-Status PosixSequentialFileReader::submit_read_(void *dst, size_t len,
-                                               uint64_t offset,
-                                               size_t *bytes_read) {
+Status PosixSequentialFileReader::submit_read_(void *dst, size_t len, uint64_t offset, size_t *bytes_read) {
     *bytes_read = 0;
 
     // io_uring unavailable: the caller supplied an explicit offset, so pread
     // is the correct synchronous primitive.
     if (ring_ == nullptr) {
-        return file_internal::sync_pread(
-            filename_, fd_, static_cast<char *>(dst), len, offset, bytes_read);
+        return file_internal::sync_pread(filename_, fd_, static_cast<char *>(dst), len, offset, bytes_read);
     }
 
 #if !HAS_IO_URING
-    return Status::not_supported(
-        std::string_view("io_uring support not compiled in"));
+    return Status::not_supported(std::string_view("io_uring support not compiled in"));
 #else
     size_t total_read = 0;
     while (total_read < len) {
@@ -81,24 +77,20 @@ Status PosixSequentialFileReader::submit_read_(void *dst, size_t len,
 #endif
 }
 
-Status PosixSequentialFileReader::read(size_t n, std::string_view *result,
-                                       char *scratch) {
+Status PosixSequentialFileReader::read(size_t n, std::string_view *result, char *scratch) {
     *result = std::string_view();
     if (n == 0) return Status::ok();
 
     size_t total_copied = 0;
 
     while (total_copied < n) {
-        if (offset_ >= buf_file_offset_ &&
-            offset_ < buf_file_offset_ + buf_bytes_valid_) {
+        if (offset_ >= buf_file_offset_ && offset_ < buf_file_offset_ + buf_bytes_valid_) {
 
-            size_t buf_internal_offset =
-                static_cast<size_t>(offset_ - buf_file_offset_);
+            size_t buf_internal_offset = static_cast<size_t>(offset_ - buf_file_offset_);
             size_t available_bytes = buf_bytes_valid_ - buf_internal_offset;
             size_t bytes_to_copy = std::min(n - total_copied, available_bytes);
 
-            std::memcpy(scratch + total_copied,
-                        buf_.data() + buf_internal_offset, bytes_to_copy);
+            std::memcpy(scratch + total_copied, buf_.data() + buf_internal_offset, bytes_to_copy);
 
             total_copied += bytes_to_copy;
             offset_ += bytes_to_copy;
@@ -109,15 +101,13 @@ Status PosixSequentialFileReader::read(size_t n, std::string_view *result,
         if (!direct_io_) {
             size_t bytes_read = 0;
             if (ring_ != nullptr) {
-                Status s = submit_read_(scratch + total_copied,
-                                        n - total_copied, offset_, &bytes_read);
+                Status s = submit_read_(scratch + total_copied, n - total_copied, offset_, &bytes_read);
                 if (!s.is_ok()) return s;
             } else {
                 // No io_uring: read(2) lets the kernel maintain the file
                 // offset and readahead.
-                Status s = file_internal::sync_read(
-                    filename_, fd_, scratch + total_copied, n - total_copied,
-                    &bytes_read);
+                Status s =
+                    file_internal::sync_read(filename_, fd_, scratch + total_copied, n - total_copied, &bytes_read);
                 if (!s.is_ok()) return s;
             }
 
@@ -128,20 +118,14 @@ Status PosixSequentialFileReader::read(size_t n, std::string_view *result,
         }
 
         size_t remaining_req = n - total_copied;
-        bool is_dst_aligned =
-            (reinterpret_cast<uintptr_t>(scratch + total_copied) %
-                 kDirectIOAlignment ==
-             0);
+        bool is_dst_aligned = (reinterpret_cast<uintptr_t>(scratch + total_copied) % kDirectIOAlignment == 0);
         bool is_offset_aligned = (offset_ % kDirectIOAlignment == 0);
 
-        if (remaining_req >= buf_.capacity() && is_dst_aligned &&
-            is_offset_aligned) {
-            size_t aligned_len =
-                remaining_req & ~static_cast<size_t>(kDirectIOAlignment - 1);
+        if (remaining_req >= buf_.capacity() && is_dst_aligned && is_offset_aligned) {
+            size_t aligned_len = remaining_req & ~static_cast<size_t>(kDirectIOAlignment - 1);
             size_t bytes_read = 0;
 
-            Status s = submit_read_(scratch + total_copied, aligned_len,
-                                    offset_, &bytes_read);
+            Status s = submit_read_(scratch + total_copied, aligned_len, offset_, &bytes_read);
             if (!s.is_ok()) return s;
 
             total_copied += bytes_read;
@@ -153,12 +137,10 @@ Status PosixSequentialFileReader::read(size_t n, std::string_view *result,
             continue;
         }
 
-        uint64_t aligned_offset =
-            offset_ & ~static_cast<uint64_t>(kDirectIOAlignment - 1);
+        uint64_t aligned_offset = offset_ & ~static_cast<uint64_t>(kDirectIOAlignment - 1);
         size_t bytes_read = 0;
 
-        Status s = submit_read_(buf_.data(), buf_.capacity(), aligned_offset,
-                                &bytes_read);
+        Status s = submit_read_(buf_.data(), buf_.capacity(), aligned_offset, &bytes_read);
         if (!s.is_ok()) return s;
 
         buf_file_offset_ = aligned_offset;
@@ -174,14 +156,10 @@ Status PosixSequentialFileReader::read(size_t n, std::string_view *result,
 Status PosixSequentialFileReader::skip(uint64_t n) {
     offset_ += n;
 
-    if (offset_ < buf_file_offset_ ||
-        offset_ >= buf_file_offset_ + buf_bytes_valid_) {
-        buf_bytes_valid_ = 0;
-    }
+    if (offset_ < buf_file_offset_ || offset_ >= buf_file_offset_ + buf_bytes_valid_) { buf_bytes_valid_ = 0; }
 
     if (!direct_io_ && ring_ == nullptr) {
-        if (::lseek(fd_, static_cast<off_t>(offset_), SEEK_SET) ==
-            static_cast<off_t>(-1)) {
+        if (::lseek(fd_, static_cast<off_t>(offset_), SEEK_SET) == static_cast<off_t>(-1)) {
             return posix_error(filename_, errno);
         }
     }

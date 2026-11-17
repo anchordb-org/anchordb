@@ -18,15 +18,11 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-Cache::Handle *ClockProCache::insert(std::string_view key, uint64_t hash,
-                                     void *value, size_t charge,
-                                     void (*deleter)(std::string_view key,
-                                                     void *value)) {
+Cache::Handle *ClockProCache::insert(std::string_view key, uint64_t hash, void *value, size_t charge,
+                                     void (*deleter)(std::string_view key, void *value)) {
     mutex_.lock();
 
-    ClockProHandle *e = std::visit(
-        [&](auto &active_map) { return active_map.get(HashedKey{key, hash}); },
-        map_);
+    ClockProHandle *e = std::visit([&](auto &active_map) { return active_map.get(HashedKey{key, hash}); }, map_);
 
     if (e != nullptr) {
         if (e->is_resident) {
@@ -60,8 +56,7 @@ Cache::Handle *ClockProCache::insert(std::string_view key, uint64_t hash,
     }
 
     // Allocate new node
-    e = reinterpret_cast<ClockProHandle *>(
-        malloc(sizeof(ClockProHandle) - 1 + key.size()));
+    e = reinterpret_cast<ClockProHandle *>(malloc(sizeof(ClockProHandle) - 1 + key.size()));
 
     e->value = value;
     e->deleter = deleter;
@@ -78,11 +73,7 @@ Cache::Handle *ClockProCache::insert(std::string_view key, uint64_t hash,
     usage_ += charge;
     ring_add(e);
 
-    std::visit(
-        [&](auto &active_map) {
-            active_map.insert(HashedKey{e->key(), e->hash}, e);
-        },
-        map_);
+    std::visit([&](auto &active_map) { active_map.insert(HashedKey{e->key(), e->hash}, e); }, map_);
 
     evict();
     mutex_.unlock();
@@ -91,9 +82,7 @@ Cache::Handle *ClockProCache::insert(std::string_view key, uint64_t hash,
 
 Cache::Handle *ClockProCache::lookup(std::string_view key, uint64_t hash) {
     mutex_.lock();
-    ClockProHandle *e = std::visit(
-        [&](auto &active_map) { return active_map.get(HashedKey{key, hash}); },
-        map_);
+    ClockProHandle *e = std::visit([&](auto &active_map) { return active_map.get(HashedKey{key, hash}); }, map_);
 
     if (e != nullptr && e->is_resident) {
         e->ref_bit = true;
@@ -114,11 +103,7 @@ void ClockProCache::release(Cache::Handle *handle) {
 
 void ClockProCache::erase(std::string_view key, uint64_t hash) {
     mutex_.lock();
-    ClockProHandle *e = std::visit(
-        [&](auto &active_map) {
-            return active_map.remove(HashedKey{key, hash});
-        },
-        map_);
+    ClockProHandle *e = std::visit([&](auto &active_map) { return active_map.remove(HashedKey{key, hash}); }, map_);
     finish_erase(e);
     mutex_.unlock();
 }
@@ -127,11 +112,7 @@ void ClockProCache::prune() {
     mutex_.lock();
     while (!ring_.is_empty()) {
         ClockProHandle *e = ring_.head();
-        std::visit(
-            [&](auto &active_map) {
-                active_map.remove(HashedKey{e->key(), e->hash});
-            },
-            map_);
+        std::visit([&](auto &active_map) { active_map.remove(HashedKey{e->key(), e->hash}); }, map_);
         finish_erase(e);
     }
     mutex_.unlock();
@@ -158,9 +139,7 @@ void ClockProCache::hand_cold_step() {
             hot_usage_ += e->charge;
 
             // Balance hot/cold ratio if hot capacity exceeded
-            while (hot_usage_ > (capacity_ - cold_capacity_)) {
-                hand_hot_step();
-            }
+            while (hot_usage_ > (capacity_ - cold_capacity_)) { hand_hot_step(); }
         } else {
             // Evict cold entry payload
             if (e->is_resident) {
@@ -223,9 +202,7 @@ void ClockProCache::hand_test_step() {
     hand_test_ = ring_.step(e);
 }
 
-void ClockProCache::ring_add(ClockProHandle *e) {
-    ring_.push_back(HashedKey{e->key(), e->hash}, e);
-}
+void ClockProCache::ring_add(ClockProHandle *e) { ring_.push_back(HashedKey{e->key(), e->hash}, e); }
 
 void ClockProCache::ring_remove(ClockProHandle *e) {
     // Advance any hand that points at the node being unlinked so it never
@@ -248,9 +225,7 @@ void ClockProCache::unref(ClockProHandle *e) {
     e->refs--;
     if (e->refs == 0) {
         assert(!e->in_cache);
-        if (e->is_resident && e->deleter && e->value) {
-            (*e->deleter)(e->key(), e->value);
-        }
+        if (e->is_resident && e->deleter && e->value) { (*e->deleter)(e->key(), e->value); }
         free(e);
     }
 }
@@ -268,8 +243,6 @@ bool ClockProCache::finish_erase(ClockProHandle *e) {
     return e != nullptr;
 }
 
-Cache *new_clock_pro_cache(size_t capacity, MapType t) {
-    return new ShardedClockProCache(capacity, t);
-}
+Cache *new_clock_pro_cache(size_t capacity, MapType t) { return new ShardedClockProCache(capacity, t); }
 
 } // namespace ANCHORDB_NAMESPACE

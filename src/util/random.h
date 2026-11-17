@@ -47,8 +47,7 @@ class Random {
         // Multiply in 64 bits so the product cannot overflow, then reduce
         // modulo 2^31 - 1 using the identity (x << 31) % M == x.
         const uint64_t product = static_cast<uint64_t>(state_) * k_multiplier;
-        uint32_t reduced =
-            static_cast<uint32_t>((product >> 31) + (product & k_modulus));
+        uint32_t reduced = static_cast<uint32_t>((product >> 31) + (product & k_modulus));
         // The first reduction can overflow by a single bit, so a second
         // correction may be required. The result can never equal the modulus,
         // so a strict ">" comparison is sufficient.
@@ -80,8 +79,7 @@ class Random {
         const uint32_t limit = k_max_next - (k_max_next % n);
         uint32_t value;
         do {
-            value =
-                next() - 1; // Shift [1, k_max_next] down to [0, k_max_next).
+            value = next() - 1; // Shift [1, k_max_next] down to [0, k_max_next).
         } while (value >= limit);
         return value % n;
     }

@@ -61,8 +61,7 @@ inline constexpr size_t kDataRecordCrcSize = sizeof(uint32_t);       // 4
 inline constexpr size_t kDataRecordTimestampSize = sizeof(uint64_t); // 8
 
 // Fixed prefix before key_size: crc + timestamp + type.
-inline constexpr size_t kDataRecordHeaderSize =
-    kDataRecordCrcSize + kDataRecordTimestampSize + sizeof(uint8_t); // 13
+inline constexpr size_t kDataRecordHeaderSize = kDataRecordCrcSize + kDataRecordTimestampSize + sizeof(uint8_t); // 13
 
 // Fixed on-disk size of the key_size field.
 inline constexpr size_t kDataRecordKeySizeSize = sizeof(uint16_t); // 2
@@ -96,8 +95,7 @@ size_t data_record_encoded_len(size_t key_size, size_t value_size);
 // payload).  `key` must not exceed kDataRecordMaxKeySize and `type` must be a
 // valid EntryType; both are asserted.  The masked CRC is computed and patched
 // in after the payload is written.
-size_t encode_data_record(std::string *dst, uint64_t timestamp,
-                          std::string_view key, std::string_view value_bytes,
+size_t encode_data_record(std::string *dst, uint64_t timestamp, std::string_view key, std::string_view value_bytes,
                           EntryType type);
 
 // Decodes one record from the front of *input and advances *input past it.  Any
@@ -143,8 +141,7 @@ class DataRecordWriter {
     // appendable writer for an existing file, pass that file's current size so
     // record locations continue at the real end of the file.  A `seal_size` of
     // 0 disables sealing.
-    DataRecordWriter(WritableFileWriter *dest, uint64_t initial_size,
-                     uint64_t seal_size = 0);
+    DataRecordWriter(WritableFileWriter *dest, uint64_t initial_size, uint64_t seal_size = 0);
 
     DataRecordWriter(const DataRecordWriter &) = delete;
     DataRecordWriter &operator=(const DataRecordWriter &) = delete;
@@ -153,8 +150,8 @@ class DataRecordWriter {
     // record written to the vLog, the blob payload).  The key limit and entry
     // type are checked before anything is written.  On success fills *out (if
     // non-null) with the record's location.
-    Status add(std::string_view key, std::string_view value_bytes,
-               EntryType type, uint64_t timestamp, DataRecordLocation *out);
+    Status add(std::string_view key, std::string_view value_bytes, EntryType type, uint64_t timestamp,
+               DataRecordLocation *out);
 
     // Appends a record that has already been encoded in this format, for
     // callers that already hold the bytes (for example a compaction copying an
@@ -270,8 +267,7 @@ class DataRecordReader {
 //   }
 class DataRecordBufferReader {
   public:
-    explicit DataRecordBufferReader(std::string_view buffer)
-        : buffer_(buffer) {}
+    explicit DataRecordBufferReader(std::string_view buffer) : buffer_(buffer) {}
 
     DataRecordBufferReader(const DataRecordBufferReader &) = delete;
     DataRecordBufferReader &operator=(const DataRecordBufferReader &) = delete;

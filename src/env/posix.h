@@ -58,8 +58,7 @@ class PosixEnv : public Env {
     // returned Status. A non-ok status (io_uring unavailable) does not mean
     // construction failed: the environment is always usable and degrades to
     // synchronous pread/pwrite. On success |*result| is never null.
-    static Status create(int max_open_files, uint32_t ring_entries,
-                         bool direct_io, PosixEnv **result);
+    static Status create(int max_open_files, uint32_t ring_entries, bool direct_io, PosixEnv **result);
 
     // Describes io_uring availability for this environment: ok when a default
     // ring was created, otherwise an error explaining why I/O is synchronous.
@@ -78,22 +77,16 @@ class PosixEnv : public Env {
 
     // File creation and I/O
 
-    Status new_sequential_file_reader(const std::string &fname,
-                                      SequentialFileReader **result,
+    Status new_sequential_file_reader(const std::string &fname, SequentialFileReader **result,
                                       size_t buf_size = 0) override;
-    Status
-    new_random_access_file_reader(const std::string &filename,
-                                  RandomAccessFileReader **result) override;
-    Status new_writable_file_writer(const std::string &filename,
-                                    WritableFileWriter **result,
+    Status new_random_access_file_reader(const std::string &filename, RandomAccessFileReader **result) override;
+    Status new_writable_file_writer(const std::string &filename, WritableFileWriter **result,
                                     size_t buf_size = 0) override;
-    Status new_appendable_file_writer(const std::string &filename,
-                                      WritableFileWriter **result,
+    Status new_appendable_file_writer(const std::string &filename, WritableFileWriter **result,
                                       size_t buf_size = 0) override;
 
     bool file_exists(const std::string &filename) override;
-    Status get_children(const std::string &dir_path,
-                        std::vector<std::string> *result) override;
+    Status get_children(const std::string &dir_path, std::vector<std::string> *result) override;
     Status remove_file(const std::string &filename) override;
     Status create_dir(const std::string &dir_name) override;
     Status remove_dir(const std::string &dir_name) override;

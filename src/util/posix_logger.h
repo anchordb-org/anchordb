@@ -56,19 +56,15 @@ class PosixLogger final : public Logger {
     static std::string timestamp() {
         using namespace std::chrono;
         const auto now = system_clock::now();
-        const auto micros =
-            duration_cast<microseconds>(now.time_since_epoch()).count() %
-            1000000;
+        const auto micros = duration_cast<microseconds>(now.time_since_epoch()).count() % 1000000;
         const std::time_t seconds = system_clock::to_time_t(now);
 
         std::tm components{};
         ::localtime_r(&seconds, &components);
 
         char buffer[32];
-        std::snprintf(buffer, sizeof(buffer),
-                      "%04d/%02d/%02d-%02d:%02d:%02d.%06d",
-                      components.tm_year + 1900, components.tm_mon + 1,
-                      components.tm_mday, components.tm_hour, components.tm_min,
+        std::snprintf(buffer, sizeof(buffer), "%04d/%02d/%02d-%02d:%02d:%02d.%06d", components.tm_year + 1900,
+                      components.tm_mon + 1, components.tm_mday, components.tm_hour, components.tm_min,
                       components.tm_sec, static_cast<int>(micros));
         return buffer;
     }
@@ -79,15 +75,12 @@ class PosixLogger final : public Logger {
         std::ostringstream stream;
         stream << std::this_thread::get_id();
         std::string id = stream.str();
-        if (id.size() > k_max_thread_id_size) {
-            id.resize(k_max_thread_id_size);
-        }
+        if (id.size() > k_max_thread_id_size) { id.resize(k_max_thread_id_size); }
         return id;
     }
 
     // Appends the printf-style message to entry, growing it as needed.
-    static void append_message(std::string &entry, const char *format,
-                               std::va_list arguments) {
+    static void append_message(std::string &entry, const char *format, std::va_list arguments) {
         std::va_list arguments_copy;
         va_copy(arguments_copy, arguments);
         const int needed = std::vsnprintf(nullptr, 0, format, arguments_copy);
@@ -96,8 +89,7 @@ class PosixLogger final : public Logger {
 
         const std::size_t offset = entry.size();
         entry.resize(offset + static_cast<std::size_t>(needed) + 1);
-        std::vsnprintf(entry.data() + offset, entry.size() - offset, format,
-                       arguments);
+        std::vsnprintf(entry.data() + offset, entry.size() - offset, format, arguments);
         entry.resize(offset + static_cast<std::size_t>(needed));
     }
 

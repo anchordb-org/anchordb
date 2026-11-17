@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "sstable/table_builder.h"
 #include "anchordb/env.h"
+#include "sstable/table_builder.h"
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -24,25 +24,19 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-TableBuilder::TableBuilder(const Options &options, const TableFileSet &files,
-                           const size_t writable_file_buf_size)
-    : comparator_(options.comparator), compressor_(options.compressor),
-      compression_level_(options.compression_level),
+TableBuilder::TableBuilder(const Options &options, const TableFileSet &files, const size_t writable_file_buf_size)
+    : comparator_(options.comparator), compressor_(options.compressor), compression_level_(options.compression_level),
       block_writer_(options.block_size, options.max_key_size),
-      summary_(static_cast<uint32_t>(block_writer_.block_size()),
-               compressor_.compress != nullptr ? compressor_.id : 0,
+      summary_(static_cast<uint32_t>(block_writer_.block_size()), compressor_.compress != nullptr ? compressor_.id : 0,
                block_writer_.max_key_size()),
       filter_builder_(options.filter), env_(options.env), files_(files) {
-    if (comparator_.compare == nullptr) {
-        comparator_ = new_byte_wise_comparator();
-    }
+    if (comparator_.compare == nullptr) { comparator_ = new_byte_wise_comparator(); }
     if (env_ == nullptr) {
         status_ = Status::invalid_argument("table builder: null env");
         return;
     }
     if (files_.data.empty() || files_.index.empty() || files_.summary.empty()) {
-        status_ = Status::invalid_argument(
-            "table builder: missing data, index or summary file name");
+        status_ = Status::invalid_argument("table builder: missing data, index or summary file name");
         return;
     }
 
@@ -74,37 +68,27 @@ Status TableBuilder::open_files_(const size_t buffer_size) {
     return Status::ok();
 }
 
-Status TableBuilder::check_addable_(std::string_view key,
-                                    uint64_t timestamp) const {
+Status TableBuilder::check_addable_(std::string_view key, uint64_t timestamp) const {
     // Reject anything that could never fit in a single index block, so the
     // retry after a block flush in append_index_() is guaranteed to succeed.
-    const size_t payload_size =
-        sizeof(uint16_t) + key.size() + sizeof(uint64_t);
-    if (key.size() > block_writer_.max_key_size() ||
-        payload_size > block_writer_.block_size()) {
+    const size_t payload_size = sizeof(uint16_t) + key.size() + sizeof(uint64_t);
+    if (key.size() > block_writer_.max_key_size() || payload_size > block_writer_.block_size()) {
         return Status::invalid_argument("table builder: key too large");
     }
 
     if (entry_count_ > 0) {
         const int cmp = comparator_.compare(key, last_key_);
-        if (cmp < 0) {
-            return Status::invalid_argument(
-                "table builder: keys must be added in ascending order");
-        }
+        if (cmp < 0) { return Status::invalid_argument("table builder: keys must be added in ascending order"); }
         if (cmp == 0 && timestamp > last_timestamp_) {
-            return Status::invalid_argument(
-                "table builder: timestamps must decrease for equal keys");
+            return Status::invalid_argument("table builder: timestamps must decrease for equal keys");
         }
     }
     return Status::ok();
 }
 
-Status TableBuilder::add(std::string_view key, std::string_view value,
-                         EntryType type, uint64_t timestamp) {
+Status TableBuilder::add(std::string_view key, std::string_view value, EntryType type, uint64_t timestamp) {
     if (!status_.is_ok()) { return status_; }
-    if (finished_ || aborted_) {
-        return Status::invalid_argument("table builder: already finished");
-    }
+    if (finished_ || aborted_) { return Status::invalid_argument("table builder: already finished"); }
 
     // A blob value already lives in the vLog.  The memtable hands it over as an
     // encoded BlobHandle, which belongs in the index only; writing it to
@@ -112,8 +96,7 @@ Status TableBuilder::add(std::string_view key, std::string_view value,
     if (type == EntryType::Blob) {
         BlobHandle handle;
         if (!parse_blob_handle(value, &handle)) {
-            return Status::invalid_argument(
-                "table builder: blob entry requires an encoded BlobHandle");
+            return Status::invalid_argument("table builder: blob entry requires an encoded BlobHandle");
         }
         return add_blob(key, handle, timestamp);
     }
@@ -134,19 +117,15 @@ Status TableBuilder::add(std::string_view key, std::string_view value,
 
     ValueHandle handle;
     handle.type = type;
-    handle.file_id =
-        0; // Inline and tombstone entries never reference the vLog.
+    handle.file_id = 0; // Inline and tombstone entries never reference the vLog.
     handle.offset = location.offset;
     handle.size = location.size;
     return append_index_(key, handle, timestamp);
 }
 
-Status TableBuilder::add_blob(std::string_view key, const BlobHandle &handle,
-                              uint64_t timestamp) {
+Status TableBuilder::add_blob(std::string_view key, const BlobHandle &handle, uint64_t timestamp) {
     if (!status_.is_ok()) { return status_; }
-    if (finished_ || aborted_) {
-        return Status::invalid_argument("table builder: already finished");
-    }
+    if (finished_ || aborted_) { return Status::invalid_argument("table builder: already finished"); }
 
     Status s = check_addable_(key, timestamp);
     if (!s.is_ok()) { return s; }
@@ -159,22 +138,18 @@ Status TableBuilder::add_blob(std::string_view key, const BlobHandle &handle,
     return append_index_(key, value_handle, timestamp);
 }
 
-Status TableBuilder::append_index_(std::string_view key,
-                                   const ValueHandle &handle,
-                                   uint64_t timestamp) {
+Status TableBuilder::append_index_(std::string_view key, const ValueHandle &handle, uint64_t timestamp) {
     if (!block_writer_.add(key, handle, timestamp)) {
         // The block is full.  Seal it and retry on a fresh block;
         // check_addable_() guarantees the entry fits in an empty block.
         if (block_writer_.empty()) {
-            status_ = Status::invalid_argument(
-                "table builder: index block rejected an empty block entry");
+            status_ = Status::invalid_argument("table builder: index block rejected an empty block entry");
             return status_;
         }
         Status s = emit_block_();
         if (!s.is_ok()) { return s; }
         if (!block_writer_.add(key, handle, timestamp)) {
-            status_ = Status::invalid_argument(
-                "table builder: entry too large for index block");
+            status_ = Status::invalid_argument("table builder: entry too large for index block");
             return status_;
         }
     }
@@ -209,30 +184,24 @@ Status TableBuilder::emit_block_() {
         // The summary records the codec id, so an active codec must identify
         // itself; otherwise a reader cannot tell how the block was stored.
         if (compressor_.id == 0) {
-            status_ = Status::invalid_argument(
-                "table builder: compressor id required");
+            status_ = Status::invalid_argument("table builder: compressor id required");
             return status_;
         }
-        if (!compressor_.compress(block.data(), block.size(),
-                                  &compressed_block_, compression_level_)) {
-            status_ = Status::io_error(std::string_view(
-                "table builder: index block compression failed"));
+        if (!compressor_.compress(block.data(), block.size(), &compressed_block_, compression_level_)) {
+            status_ = Status::io_error(std::string_view("table builder: index block compression failed"));
             return status_;
         }
         stored = compressed_block_;
     }
     if (stored.size() > UINT32_MAX) {
-        status_ = Status::invalid_argument(
-            "table builder: stored index block too large");
+        status_ = Status::invalid_argument("table builder: stored index block too large");
         return status_;
     }
 
     // Record the block in the summary before the writer is reset (last_key()
     // is a view into the writer's buffer).
-    if (!summary_.add(block_writer_.last_key(), block_offset,
-                      static_cast<uint32_t>(stored.size()))) {
-        status_ = Status::invalid_argument(
-            "table builder: separator key too large for summary index");
+    if (!summary_.add(block_writer_.last_key(), block_offset, static_cast<uint32_t>(stored.size()))) {
+        status_ = Status::invalid_argument("table builder: separator key too large for summary index");
         return status_;
     }
 
@@ -247,9 +216,7 @@ Status TableBuilder::emit_block_() {
     return Status::ok();
 }
 
-Status TableBuilder::write_file_(const std::string &filename,
-                                 std::string_view contents,
-                                 uint64_t *size_out) {
+Status TableBuilder::write_file_(const std::string &filename, std::string_view contents, uint64_t *size_out) {
     WritableFileWriter *raw = nullptr;
     Status s = env_->new_writable_file_writer(filename, &raw);
     if (!s.is_ok()) { return s; }
@@ -270,8 +237,7 @@ Status TableBuilder::write_file_(const std::string &filename,
 Status TableBuilder::write_filter_() {
     if (!filter_builder_.enabled()) { return Status::ok(); }
     if (files_.filter.empty()) {
-        return Status::invalid_argument(
-            "table builder: filter enabled but no filter file name");
+        return Status::invalid_argument("table builder: filter enabled but no filter file name");
     }
     return write_file_(files_.filter, filter_builder_.finish(), &filter_size_);
 }
@@ -296,9 +262,7 @@ Status TableBuilder::finish() {
     // that describes them.
     Status s = data_writer_->sync();
     if (s.is_ok()) { s = index_file_->sync(); }
-    if (s.is_ok()) {
-        s = write_file_(files_.summary, summary_.finish(), nullptr);
-    }
+    if (s.is_ok()) { s = write_file_(files_.summary, summary_.finish(), nullptr); }
     if (s.is_ok()) { s = write_filter_(); }
 
     // Always release the open descriptors and preserve the first error.

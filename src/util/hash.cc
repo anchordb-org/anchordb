@@ -51,12 +51,8 @@ uint32_t murmurhash2_32(const char *data, size_t n, uint32_t seed) {
 
     // Pick up remaining bytes
     switch (limit - data) {
-    case 3:
-        h += static_cast<uint32_t>(static_cast<uint8_t>(data[2])) << 16;
-        [[fallthrough]];
-    case 2:
-        h += static_cast<uint32_t>(static_cast<uint8_t>(data[1])) << 8;
-        [[fallthrough]];
+    case 3: h += static_cast<uint32_t>(static_cast<uint8_t>(data[2])) << 16; [[fallthrough]];
+    case 2: h += static_cast<uint32_t>(static_cast<uint8_t>(data[1])) << 8; [[fallthrough]];
     case 1:
         h += static_cast<uint32_t>(static_cast<uint8_t>(data[0]));
         h *= m;
@@ -115,8 +111,8 @@ uint64_t xx_hash64(std::string_view slice, uint64_t seed) {
             return acc;
         };
 
-        h64 = ((v1 << 1) | (v1 >> 63)) + ((v2 << 7) | (v2 >> 57)) +
-              ((v3 << 12) | (v3 >> 52)) + ((v4 << 18) | (v4 >> 46));
+        h64 =
+            ((v1 << 1) | (v1 >> 63)) + ((v2 << 7) | (v2 >> 57)) + ((v3 << 12) | (v3 >> 52)) + ((v4 << 18) | (v4 >> 46));
         h64 = merge(h64, v1);
         h64 = merge(h64, v2);
         h64 = merge(h64, v3);
@@ -218,24 +214,12 @@ uint64_t murmurhash3_64(std::string_view slice, uint64_t seed) {
     size_t remaining = limit - data;
 
     switch (remaining) {
-    case 7:
-        k1 ^= static_cast<uint64_t>(static_cast<uint8_t>(data[6])) << 48;
-        [[fallthrough]];
-    case 6:
-        k1 ^= static_cast<uint64_t>(static_cast<uint8_t>(data[5])) << 40;
-        [[fallthrough]];
-    case 5:
-        k1 ^= static_cast<uint64_t>(static_cast<uint8_t>(data[4])) << 32;
-        [[fallthrough]];
-    case 4:
-        k1 ^= static_cast<uint64_t>(static_cast<uint8_t>(data[3])) << 24;
-        [[fallthrough]];
-    case 3:
-        k1 ^= static_cast<uint64_t>(static_cast<uint8_t>(data[2])) << 16;
-        [[fallthrough]];
-    case 2:
-        k1 ^= static_cast<uint64_t>(static_cast<uint8_t>(data[1])) << 8;
-        [[fallthrough]];
+    case 7: k1 ^= static_cast<uint64_t>(static_cast<uint8_t>(data[6])) << 48; [[fallthrough]];
+    case 6: k1 ^= static_cast<uint64_t>(static_cast<uint8_t>(data[5])) << 40; [[fallthrough]];
+    case 5: k1 ^= static_cast<uint64_t>(static_cast<uint8_t>(data[4])) << 32; [[fallthrough]];
+    case 4: k1 ^= static_cast<uint64_t>(static_cast<uint8_t>(data[3])) << 24; [[fallthrough]];
+    case 3: k1 ^= static_cast<uint64_t>(static_cast<uint8_t>(data[2])) << 16; [[fallthrough]];
+    case 2: k1 ^= static_cast<uint64_t>(static_cast<uint8_t>(data[1])) << 8; [[fallthrough]];
     case 1:
         k1 ^= static_cast<uint64_t>(static_cast<uint8_t>(data[0]));
         k1 *= c1;

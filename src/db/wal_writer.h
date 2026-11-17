@@ -46,8 +46,7 @@ class WALWriter {
     // `max_frame_payload` bounds a single frame's payload and doubles as the
     // fragmentation threshold.  Zero is clamped up to one byte, and values
     // above UINT32_MAX are clamped down (the frame length field is 32-bit).
-    explicit WALWriter(WritableFileWriter *dest,
-                       size_t max_frame_payload = kWALDefaultMaxFramePayload);
+    explicit WALWriter(WritableFileWriter *dest, size_t max_frame_payload = kWALDefaultMaxFramePayload);
 
     WALWriter(const WALWriter &) = delete;
     WALWriter &operator=(const WALWriter &) = delete;

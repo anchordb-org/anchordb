@@ -41,8 +41,7 @@ enum class FileType : uint8_t {
 // Builds "<dbname>/<number zero-padded to 6><suffix>".  `dbname` may be empty,
 // in which case no directory prefix is written.  `suffix` is appended verbatim,
 // so it should include a leading '.' for ".log"-style names.
-std::string make_filename(std::string_view dbname, uint64_t number,
-                         std::string_view suffix);
+std::string make_filename(std::string_view dbname, uint64_t number, std::string_view suffix);
 
 // Numbered file builders.
 std::string log_filename(std::string_view dbname, uint64_t number);
@@ -65,7 +64,6 @@ std::string filename(std::string_view dbname, uint64_t number, FileType type);
 
 // Recovers the (number, type) encoded in a generated file name, ignoring any
 // leading directory.  Returns false if the name matches no known pattern.
-bool parse_filename(std::string_view filename, uint64_t *number,
-                    FileType *type);
+bool parse_filename(std::string_view filename, uint64_t *number, FileType *type);
 
 } // namespace ANCHORDB_NAMESPACE

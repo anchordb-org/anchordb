@@ -26,10 +26,8 @@ inline uint32_t unaligned_load_32(const char *p) {
     std::memcpy(&result, p, sizeof(result));
 #else
     const uint8_t *ptr = reinterpret_cast<const uint8_t *>(p);
-    result = static_cast<uint32_t>(ptr[0]) |
-             (static_cast<uint32_t>(ptr[1]) << 8) |
-             (static_cast<uint32_t>(ptr[2]) << 16) |
-             (static_cast<uint32_t>(ptr[3]) << 24);
+    result = static_cast<uint32_t>(ptr[0]) | (static_cast<uint32_t>(ptr[1]) << 8) |
+             (static_cast<uint32_t>(ptr[2]) << 16) | (static_cast<uint32_t>(ptr[3]) << 24);
 #endif
     return result;
 }
@@ -40,14 +38,10 @@ inline uint64_t unaligned_load_64(const char *p) {
     std::memcpy(&result, p, sizeof(result));
 #else
     const uint8_t *ptr = reinterpret_cast<const uint8_t *>(p);
-    result = static_cast<uint64_t>(ptr[0]) |
-             (static_cast<uint64_t>(ptr[1]) << 8) |
-             (static_cast<uint64_t>(ptr[2]) << 16) |
-             (static_cast<uint64_t>(ptr[3]) << 24) |
-             (static_cast<uint64_t>(ptr[4]) << 32) |
-             (static_cast<uint64_t>(ptr[5]) << 40) |
-             (static_cast<uint64_t>(ptr[6]) << 48) |
-             (static_cast<uint64_t>(ptr[7]) << 56);
+    result = static_cast<uint64_t>(ptr[0]) | (static_cast<uint64_t>(ptr[1]) << 8) |
+             (static_cast<uint64_t>(ptr[2]) << 16) | (static_cast<uint64_t>(ptr[3]) << 24) |
+             (static_cast<uint64_t>(ptr[4]) << 32) | (static_cast<uint64_t>(ptr[5]) << 40) |
+             (static_cast<uint64_t>(ptr[6]) << 48) | (static_cast<uint64_t>(ptr[7]) << 56);
 #endif
     return result;
 }
@@ -94,15 +88,11 @@ void encode_fixed_16(char *dst, uint16_t value) {
 
 // Encodes a 32-bit unsigned integer in little-endian byte order.
 // Writes exactly 4 bytes to dst.
-void encode_fixed_32(char *dst, uint32_t value) {
-    unaligned_store_32(dst, value);
-}
+void encode_fixed_32(char *dst, uint32_t value) { unaligned_store_32(dst, value); }
 
 // Encodes a 64-bit unsigned integer in little-endian byte order.
 // Writes exactly 8 bytes to dst.
-void encode_fixed_64(char *dst, uint64_t value) {
-    unaligned_store_64(dst, value);
-}
+void encode_fixed_64(char *dst, uint64_t value) { unaligned_store_64(dst, value); }
 
 // Decodes a 16-bit unsigned integer from a little-endian byte sequence.
 uint16_t decode_fixed_16(const char *src) {
@@ -111,8 +101,7 @@ uint16_t decode_fixed_16(const char *src) {
     std::memcpy(&result, src, sizeof(result));
 #else
     const uint8_t *ptr = reinterpret_cast<const uint8_t *>(src);
-    result =
-        static_cast<uint16_t>(ptr[0]) | (static_cast<uint16_t>(ptr[1]) << 8);
+    result = static_cast<uint16_t>(ptr[0]) | (static_cast<uint16_t>(ptr[1]) << 8);
 #endif
     return result;
 }
@@ -299,8 +288,7 @@ int varint_len(uint64_t v) {
     return len;
 }
 
-const char *get_varint_32_ptr_fallback(const char *p, const char *limit,
-                                       uint32_t *value) {
+const char *get_varint_32_ptr_fallback(const char *p, const char *limit, uint32_t *value) {
     const auto *ptr = reinterpret_cast<const uint8_t *>(p);
     const auto *lim = reinterpret_cast<const uint8_t *>(limit);
 
@@ -348,8 +336,7 @@ const char *get_varint_32_ptr_fallback(const char *p, const char *limit,
     return nullptr; // Corrupted varint (spans > 5 bytes for uint32)
 }
 
-const char *get_varint_64_ptr_fallback(const char *p, const char *limit,
-                                       uint64_t *value) {
+const char *get_varint_64_ptr_fallback(const char *p, const char *limit, uint64_t *value) {
     const auto *ptr = reinterpret_cast<const uint8_t *>(p);
     const auto *lim = reinterpret_cast<const uint8_t *>(limit);
 
@@ -394,8 +381,7 @@ const char *get_varint_64_ptr_fallback(const char *p, const char *limit,
     return nullptr; // Corrupted varint or buffer overflow
 }
 
-const char *get_varint_32_ptr(const char *p, const char *limit,
-                              uint32_t *value) {
+const char *get_varint_32_ptr(const char *p, const char *limit, uint32_t *value) {
     if (p < limit) {
         uint32_t result = *reinterpret_cast<const uint8_t *>(p);
         if ((result & 0x80) == 0) {
@@ -406,8 +392,7 @@ const char *get_varint_32_ptr(const char *p, const char *limit,
     return get_varint_32_ptr_fallback(p, limit, value);
 }
 
-const char *get_varint_64_ptr(const char *p, const char *limit,
-                              uint64_t *value) {
+const char *get_varint_64_ptr(const char *p, const char *limit, uint64_t *value) {
     if (p < limit) {
         uint64_t result = *reinterpret_cast<const uint8_t *>(p);
         if ((result & 0x80) == 0) {

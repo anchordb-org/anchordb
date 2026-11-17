@@ -44,9 +44,7 @@ inline constexpr uint32_t k_mask_rot_l = 19;
 
 // Masks a raw CRC32 value so that it cannot contain a partial frame delimiter.
 // The masked value is suitable for storage or transmission.
-inline uint32_t mask(uint32_t crc) {
-    return ((crc >> k_mask_rot_r) | (crc << k_mask_rot_l)) + k_mask_delta;
-}
+inline uint32_t mask(uint32_t crc) { return ((crc >> k_mask_rot_r) | (crc << k_mask_rot_l)) + k_mask_delta; }
 
 // Reverses the mask operation to recover the original CRC32 value.
 inline uint32_t unmask(uint32_t masked_crc) {

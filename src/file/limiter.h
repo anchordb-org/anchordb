@@ -38,9 +38,7 @@ class Limiter {
         return true;
     }
 
-    void release() noexcept {
-        allowed_.fetch_add(1, std::memory_order_relaxed);
-    }
+    void release() noexcept { allowed_.fetch_add(1, std::memory_order_relaxed); }
 
   private:
     // Positive = free slots; non-positive = number of waiters.

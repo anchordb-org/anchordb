@@ -82,14 +82,11 @@ using Table = Skiplist<const char *, KeyComparator>;
 // into the iterator's scratch buffer.
 class MemtableIterator : public Iterator {
   public:
-    MemtableIterator(Table *table, const MemTable *memtable)
-        : memtable_(memtable), iter_(table) {}
+    MemtableIterator(Table *table, const MemTable *memtable) : memtable_(memtable), iter_(table) {}
 
     MemtableIterator(MemtableIterator &&other) noexcept
-        : memtable_(other.memtable_), iter_(std::move(other.iter_)),
-          tmp_(std::move(other.tmp_)),
-          value_scratch_(std::move(other.value_scratch_)),
-          status_(std::move(other.status_)) {}
+        : memtable_(other.memtable_), iter_(std::move(other.iter_)), tmp_(std::move(other.tmp_)),
+          value_scratch_(std::move(other.value_scratch_)), status_(std::move(other.status_)) {}
 
     MemtableIterator &operator=(MemtableIterator &&other) {
         if (this != &other) {
@@ -107,14 +104,10 @@ class MemtableIterator : public Iterator {
     bool valid() const override { return iter_.valid(); }
     void next() override { iter_.next(); }
     void prev() override { iter_.prev(); }
-    void seek(std::string_view key) override {
-        iter_.seek(encode_key(&tmp_, key));
-    }
+    void seek(std::string_view key) override { iter_.seek(encode_key(&tmp_, key)); }
     void seek_to_first() override { iter_.seek_to_first(); }
     void seek_to_last() override { iter_.seek_to_last(); }
-    std::string_view key() const override {
-        return get_len_prefixed_slice(iter_.key());
-    }
+    std::string_view key() const override { return get_len_prefixed_slice(iter_.key()); }
     std::string_view value() const override;
     Status status() const override { return status_; }
 
@@ -135,18 +128,12 @@ class MemtableIterator : public Iterator {
 // numbered vLog file by `file_id` when a blob value is read back.
 class MemTable {
   public:
-    explicit MemTable(Comparator comparator, const uint32_t arena_block_size,
-                      size_t max_key_size = kDefaultMaxKeySize,
-                      DataRecordWriter *vlog_writer = nullptr,
-                      uint32_t vlog_file_id = 0,
-                      size_t value_threshold = 4 * 1024, Env *env = nullptr,
-                      std::string vlog_dbname = std::string())
-        : comparator_(std::move(comparator)), arena_(arena_block_size),
-          refs_{0}, max_key_size_(max_key_size),
-          value_threshold_(value_threshold), vlog_writer_(vlog_writer),
-          vlog_file_id_(vlog_file_id), env_(env),
-          vlog_dbname_(std::move(vlog_dbname)),
-          table_(KeyComparator(comparator_), &arena_) {}
+    explicit MemTable(Comparator comparator, const uint32_t arena_block_size, size_t max_key_size = kDefaultMaxKeySize,
+                      DataRecordWriter *vlog_writer = nullptr, uint32_t vlog_file_id = 0,
+                      size_t value_threshold = 4 * 1024, Env *env = nullptr, std::string vlog_dbname = std::string())
+        : comparator_(std::move(comparator)), arena_(arena_block_size), refs_{0}, max_key_size_(max_key_size),
+          value_threshold_(value_threshold), vlog_writer_(vlog_writer), vlog_file_id_(vlog_file_id), env_(env),
+          vlog_dbname_(std::move(vlog_dbname)), table_(KeyComparator(comparator_), &arena_) {}
 
     MemTable(const MemTable &) = delete;
     MemTable &operator=(const MemTable &) = delete;
@@ -166,8 +153,7 @@ class MemTable {
 
     // Inserts one entry.  Returns Status::invalid_argument when `key` exceeds
     // max_key_size().  Not thread-safe: writers must be serialized.
-    Status add(seq_num seq, EntryType type, std::string_view key,
-               std::string_view value);
+    Status add(seq_num seq, EntryType type, std::string_view key, std::string_view value);
 
     // Maximum accepted key length in bytes.
     size_t max_key_size() const { return max_key_size_; }
@@ -184,8 +170,7 @@ class MemTable {
 
     // Reads and decodes the vLog record referenced by `handle`, copies its
     // value into *value and validates the stored key and entry type.
-    Status read_blob_(const BlobHandle &handle, std::string_view expected_key,
-                      std::string *value) const;
+    Status read_blob_(const BlobHandle &handle, std::string_view expected_key, std::string *value) const;
 
     Comparator comparator_;
     Arena arena_;

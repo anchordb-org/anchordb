@@ -47,9 +47,7 @@ inline constexpr size_t kMaxIndexBlockSize = 64 * 1024;            // 64KB
 inline size_t round_index_block_size(size_t block_size) noexcept {
     if (block_size < kMinIndexBlockSize) { block_size = kMinIndexBlockSize; }
     if (block_size > kMaxIndexBlockSize) { block_size = kMaxIndexBlockSize; }
-    const size_t aligned =
-        ((block_size + kIndexBlockAlignment - 1) / kIndexBlockAlignment) *
-        kIndexBlockAlignment;
+    const size_t aligned = ((block_size + kIndexBlockAlignment - 1) / kIndexBlockAlignment) * kIndexBlockAlignment;
     return aligned > kMaxIndexBlockSize ? kMaxIndexBlockSize : aligned;
 }
 
@@ -118,11 +116,9 @@ class IndexBlockBuilder {
     // round_index_block_size().  `max_key_size` is the requested key limit but
     // is capped to block_size() / 4, so a key can never dominate a block.  Keys
     // longer than the effective limit are rejected by add().
-    explicit IndexBlockBuilder(size_t block_size = kDefaultBlockSize,
-                               size_t max_key_size = kDefaultMaxKeySize)
-        : block_size_(round_index_block_size(block_size)),
-          requested_max_key_size_(max_key_size), buffer_(new char[block_size_]),
-          free_space_boundary_(block_size_) {}
+    explicit IndexBlockBuilder(size_t block_size = kDefaultBlockSize, size_t max_key_size = kDefaultMaxKeySize)
+        : block_size_(round_index_block_size(block_size)), requested_max_key_size_(max_key_size),
+          buffer_(new char[block_size_]), free_space_boundary_(block_size_) {}
 
     IndexBlockBuilder(const IndexBlockBuilder &) = delete;
     IndexBlockBuilder &operator=(const IndexBlockBuilder &) = delete;
@@ -202,9 +198,8 @@ class IndexBlockBuilder {
 // Encoded size of the value returned by an index block iterator's value():
 //   [ type (1B) | file_id (4B) | size (4B) | offset (8B) | timestamp (8B) ]
 // Decode it with IndexBlockReader::decode_value().
-inline constexpr size_t kIndexValueSize = sizeof(uint8_t) + sizeof(uint32_t) +
-                                          sizeof(uint32_t) + sizeof(uint64_t) +
-                                          sizeof(uint64_t);
+inline constexpr size_t kIndexValueSize =
+    sizeof(uint8_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint64_t) + sizeof(uint64_t);
 
 // A fully decoded index block entry.
 struct IndexBlockEntry {
@@ -221,8 +216,7 @@ struct IndexBlockEntry {
 // parsed.  valid() is false if the block is truncated or otherwise malformed.
 class IndexBlockReader {
   public:
-    explicit IndexBlockReader(std::string_view block,
-                              size_t block_size = kDefaultBlockSize);
+    explicit IndexBlockReader(std::string_view block, size_t block_size = kDefaultBlockSize);
 
     IndexBlockReader(const IndexBlockReader &) = delete;
     IndexBlockReader &operator=(const IndexBlockReader &) = delete;
@@ -252,8 +246,7 @@ class IndexBlockReader {
 
     // Decodes a value() view produced by the iterator into a handle/timestamp.
     // Returns false if the view is not exactly kIndexValueSize bytes.
-    static bool decode_value(std::string_view value, ValueHandle *handle,
-                             uint64_t *timestamp);
+    static bool decode_value(std::string_view value, ValueHandle *handle, uint64_t *timestamp);
 
   private:
     const char *data_;

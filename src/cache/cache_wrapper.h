@@ -33,9 +33,7 @@ class CacheWrapper {
     CacheWrapper(const CacheWrapper &) = delete;
     CacheWrapper &operator=(const CacheWrapper &) = delete;
 
-    CacheWrapper(CacheWrapper &&other) noexcept : cache_(other.cache_) {
-        other.cache_ = nullptr;
-    }
+    CacheWrapper(CacheWrapper &&other) noexcept : cache_(other.cache_) { other.cache_ = nullptr; }
     CacheWrapper &operator=(CacheWrapper &&other) noexcept {
         if (this != &other) {
             delete cache_;

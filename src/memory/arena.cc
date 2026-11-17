@@ -23,8 +23,7 @@
 namespace ANCHORDB_NAMESPACE {
 
 Arena::Arena(const uint32_t block_size)
-    : k_block_size_(block_size), alloc_ptr_{nullptr}, alloc_bytes_remaining_{0},
-      memory_usage_{0} {}
+    : k_block_size_(block_size), alloc_ptr_{nullptr}, alloc_bytes_remaining_{0}, memory_usage_{0} {}
 
 Arena::~Arena() {
     for (size_t i = 0; i < blocks_.size(); ++i) { delete[] blocks_[i]; }
@@ -43,8 +42,7 @@ char *Arena::allocate(size_t bytes) {
 
 char *Arena::allocate_aligned(size_t bytes) {
     const int align = (sizeof(void *) > 8) ? sizeof(void *) : 8;
-    static_assert((align & (align - 1)) == 0,
-                  "pointer size should be a power of 2");
+    static_assert((align & (align - 1)) == 0, "pointer size should be a power of 2");
 
     size_t curr_mod = reinterpret_cast<uintptr_t>(alloc_ptr_) & (align - 1);
     size_t slop = (curr_mod == 0 ? 0 : align - curr_mod);

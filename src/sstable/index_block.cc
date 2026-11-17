@@ -27,8 +27,7 @@ void IndexBlockBuilder::write_header() noexcept {
     // The boundary is a block-local offset; 32 bits cover every configurable
     // block size, so the real value is stored directly (empty blocks store
     // block_size_).
-    encode_fixed_32(buffer_ + sizeof(uint32_t),
-                    static_cast<uint32_t>(free_space_boundary_));
+    encode_fixed_32(buffer_ + sizeof(uint32_t), static_cast<uint32_t>(free_space_boundary_));
 }
 
 bool IndexBlockBuilder::set_block_size(size_t block_size) {
@@ -47,22 +46,16 @@ bool IndexBlockBuilder::set_block_size(size_t block_size) {
     return true;
 }
 
-bool IndexBlockBuilder::add(std::string_view key, ValueHandle handle,
-                            uint64_t timestamp) {
+bool IndexBlockBuilder::add(std::string_view key, ValueHandle handle, uint64_t timestamp) {
     assert(!finished_);
 
     // Keys are bounded by the effective max_key_size (which is itself capped to
     // a quarter of the block); a rejected entry can never fit a segment and
     // must be handled by the caller.
-    const size_t payload_size =
-        sizeof(uint16_t) + key.size() + sizeof(uint64_t);
-    if (finished_ || sealed_ || key.size() > max_key_size() ||
-        payload_size > block_size_) {
-        return false;
-    }
+    const size_t payload_size = sizeof(uint16_t) + key.size() + sizeof(uint64_t);
+    if (finished_ || sealed_ || key.size() > max_key_size() || payload_size > block_size_) { return false; }
 
-    const size_t forward_end =
-        kIndexHeaderSize + static_cast<size_t>(slot_count_) * kIndexSlotSize;
+    const size_t forward_end = kIndexHeaderSize + static_cast<size_t>(slot_count_) * kIndexSlotSize;
     const size_t required = kIndexSlotSize + payload_size;
     const size_t available = free_space_boundary_ - forward_end;
 
@@ -91,8 +84,7 @@ bool IndexBlockBuilder::add(std::string_view key, ValueHandle handle,
     last_entry_offset_ = static_cast<int64_t>(new_boundary);
 
     // Inline and tombstone entries never reference a vLog file.
-    const uint32_t file_id =
-        handle.type == EntryType::Blob ? handle.file_id : 0;
+    const uint32_t file_id = handle.type == EntryType::Blob ? handle.file_id : 0;
 
     // Fixed-size slot grows up from the header.
     char *slot = buffer_ + forward_end;
@@ -110,32 +102,24 @@ bool IndexBlockBuilder::add(std::string_view key, ValueHandle handle,
 
 namespace {
 
-int ByteWiseCompare(std::string_view a, std::string_view b) {
-    return a.compare(b);
-}
+int ByteWiseCompare(std::string_view a, std::string_view b) { return a.compare(b); }
 
 // Fallback used when the caller supplies no comparator.
-const Comparator kByteWiseComparator{&ByteWiseCompare, nullptr, nullptr,
-                                     nullptr};
+const Comparator kByteWiseComparator{&ByteWiseCompare, nullptr, nullptr, nullptr};
 } // namespace
 
 IndexBlockReader::IndexBlockReader(std::string_view block, size_t block_size)
-    : data_(block.data()), size_(block.size()),
-      block_size_(round_index_block_size(block_size)), slot_count_(0),
+    : data_(block.data()), size_(block.size()), block_size_(round_index_block_size(block_size)), slot_count_(0),
       valid_(false) {
     // A block is always exactly one configured (aligned) segment.  Only the
     // first block_size_ bytes are parsed; extra trailing bytes are ignored.
     if (size_ < kIndexHeaderSize || size_ < block_size_) { return; }
 
     slot_count_ = decode_fixed_32(data_);
-    const uint32_t free_space_boundary =
-        decode_fixed_32(data_ + sizeof(uint32_t));
+    const uint32_t free_space_boundary = decode_fixed_32(data_ + sizeof(uint32_t));
 
-    const size_t slots_end =
-        kIndexHeaderSize + static_cast<size_t>(slot_count_) * kIndexSlotSize;
-    if (slots_end > block_size_ || free_space_boundary > block_size_) {
-        return;
-    }
+    const size_t slots_end = kIndexHeaderSize + static_cast<size_t>(slot_count_) * kIndexSlotSize;
+    if (slots_end > block_size_ || free_space_boundary > block_size_) { return; }
 
     // The backward payload must start at or after the forward slot array once
     // at least one entry has been stored.
@@ -149,17 +133,13 @@ IndexBlockReader::IndexBlockReader(std::string_view block, size_t block_size)
         // Payloads grow down from the free-space boundary, so every payload
         // starts at or above it; it must hold at least its 2-byte length
         // prefix and stay inside the segment.
-        if (key_off < free_space_boundary ||
-            static_cast<size_t>(key_off) + sizeof(uint16_t) > block_size_) {
-            return;
-        }
+        if (key_off < free_space_boundary || static_cast<size_t>(key_off) + sizeof(uint16_t) > block_size_) { return; }
 
         const uint8_t type = static_cast<uint8_t>(slot[kSlotTypeOff]);
         if (type > static_cast<uint8_t>(EntryType::Blob)) { return; }
 
         const uint16_t key_len = decode_fixed_16(data_ + key_off);
-        const size_t key_start =
-            static_cast<size_t>(key_off) + sizeof(uint16_t);
+        const size_t key_start = static_cast<size_t>(key_off) + sizeof(uint16_t);
         if (key_start + key_len + sizeof(uint64_t) > block_size_) { return; }
     }
 
@@ -177,8 +157,7 @@ IndexBlockEntry IndexBlockReader::entry(size_t index) const {
 
     IndexBlockEntry result;
     result.key = std::string_view(payload + sizeof(uint16_t), key_len);
-    result.handle.type =
-        static_cast<EntryType>(static_cast<uint8_t>(slot[kSlotTypeOff]));
+    result.handle.type = static_cast<EntryType>(static_cast<uint8_t>(slot[kSlotTypeOff]));
     result.handle.file_id = decode_fixed_32(slot + kSlotFileIdOff);
     result.handle.size = decode_fixed_32(slot + kSlotSizeOff);
     result.handle.offset = decode_fixed_64(slot + kSlotGlobalOffsetOff);
@@ -186,8 +165,7 @@ IndexBlockEntry IndexBlockReader::entry(size_t index) const {
     return result;
 }
 
-bool IndexBlockReader::decode_value(std::string_view value, ValueHandle *handle,
-                                    uint64_t *timestamp) {
+bool IndexBlockReader::decode_value(std::string_view value, ValueHandle *handle, uint64_t *timestamp) {
     if (value.size() != kIndexValueSize) { return false; }
 
     const char *p = value.data();
@@ -197,10 +175,7 @@ bool IndexBlockReader::decode_value(std::string_view value, ValueHandle *handle,
         handle->size = decode_fixed_32(p + 1 + sizeof(uint32_t));
         handle->offset = decode_fixed_64(p + 1 + 2 * sizeof(uint32_t));
     }
-    if (timestamp != nullptr) {
-        *timestamp =
-            decode_fixed_64(p + 1 + 2 * sizeof(uint32_t) + sizeof(uint64_t));
-    }
+    if (timestamp != nullptr) { *timestamp = decode_fixed_64(p + 1 + 2 * sizeof(uint32_t) + sizeof(uint64_t)); }
     return true;
 }
 
@@ -273,16 +248,11 @@ class IndexBlockIter : public Iterator {
         if (index_ < reader_.size()) {
             const IndexBlockEntry current = reader_.entry(index_);
             key_ = current.key;
-            value_buf_[0] =
-                static_cast<char>(static_cast<uint8_t>(current.handle.type));
+            value_buf_[0] = static_cast<char>(static_cast<uint8_t>(current.handle.type));
             encode_fixed_32(value_buf_ + 1, current.handle.file_id);
-            encode_fixed_32(value_buf_ + 1 + sizeof(uint32_t),
-                            current.handle.size);
-            encode_fixed_64(value_buf_ + 1 + 2 * sizeof(uint32_t),
-                            current.handle.offset);
-            encode_fixed_64(value_buf_ + 1 + 2 * sizeof(uint32_t) +
-                                sizeof(uint64_t),
-                            current.timestamp);
+            encode_fixed_32(value_buf_ + 1 + sizeof(uint32_t), current.handle.size);
+            encode_fixed_64(value_buf_ + 1 + 2 * sizeof(uint32_t), current.handle.offset);
+            encode_fixed_64(value_buf_ + 1 + 2 * sizeof(uint32_t) + sizeof(uint64_t), current.timestamp);
             value_ = std::string_view(value_buf_, kIndexValueSize);
         } else {
             key_ = std::string_view();
@@ -303,10 +273,7 @@ class IndexBlockIter : public Iterator {
 } // namespace
 
 Iterator *IndexBlockReader::new_iterator(Comparator comparator) const {
-    if (!valid_) {
-        return new_error_iterator(
-            Status::corruption("bad index block contents"));
-    }
+    if (!valid_) { return new_error_iterator(Status::corruption("bad index block contents")); }
     if (empty()) { return new_empty_iterator(); }
     if (comparator.compare == nullptr) { comparator = kByteWiseComparator; }
     return new IndexBlockIter(*this, comparator);

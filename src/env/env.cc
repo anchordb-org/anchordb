@@ -46,9 +46,7 @@ Env *Env::default_env() {
     return platform_env;
 }
 
-void Env::set_default_env(Env *env) {
-    g_default_env_override.store(env, std::memory_order_release);
-}
+void Env::set_default_env(Env *env) { g_default_env_override.store(env, std::memory_order_release); }
 
 Env::~Env() = default;
 EnvWrapper::~EnvWrapper() = default;

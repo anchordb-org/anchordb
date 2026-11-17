@@ -55,9 +55,9 @@ class Arena {
     // Allocates and tracks a new block of the given size.
     char *allocate_new_block(size_t block_bytes);
 
-    char *alloc_ptr_; // Pointer to the next free byte in the current block.
-    size_t alloc_bytes_remaining_; // Bytes remaining in the current block.
-    std::vector<char *> blocks_;   // All blocks owned by the arena.
+    char *alloc_ptr_;                    // Pointer to the next free byte in the current block.
+    size_t alloc_bytes_remaining_;       // Bytes remaining in the current block.
+    std::vector<char *> blocks_;         // All blocks owned by the arena.
     const uint32_t k_block_size_ = 4096; // configured block size, in bytes
 
     size_t memory_usage_; // Total memory allocated by the arena.

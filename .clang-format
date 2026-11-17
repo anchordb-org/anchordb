@@ -10,4 +10,5 @@
   "AllowShortFunctionsOnASingleLine": "All",
   "AllowShortCaseLabelsOnASingleLine": true,
   "AllowShortBlocksOnASingleLine": "Always",
+  "ColumnLimit": 120,
 }

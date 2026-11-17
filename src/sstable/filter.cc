@@ -21,8 +21,7 @@
 namespace ANCHORDB_NAMESPACE {
 
 FilterBuilder::FilterBuilder(const Filter &filter)
-    : filter_(filter),
-      enabled_(filter.create_filter != nullptr && filter.name != nullptr) {}
+    : filter_(filter), enabled_(filter.create_filter != nullptr && filter.name != nullptr) {}
 
 void FilterBuilder::add(std::string_view user_key) {
     if (!enabled_) { return; }
@@ -56,32 +55,23 @@ const std::string &FilterBuilder::finish() {
     if (!keys_.empty()) {
         std::vector<std::string_view> views(keys_.size());
         for (size_t i = 0; i < keys_.size(); ++i) { views[i] = keys_[i]; }
-        filter_.create_filter(filter_.state, views.data(), views.size(),
-                              &block_);
+        filter_.create_filter(filter_.state, views.data(), views.size(), &block_);
     }
     return block_;
 }
 
-FilterReader::FilterReader(const Filter &filter, std::string_view block)
-    : filter_(filter) {
+FilterReader::FilterReader(const Filter &filter, std::string_view block) : filter_(filter) {
     if (filter_.name == nullptr || filter_.key_may_match == nullptr) { return; }
     if (block.size() < kFilterHeaderSize) { return; }
-    if (std::memcmp(block.data(), kFilterMagic,
-                    sizeof(kFilterMagic)) != 0) {
-        return;
-    }
+    if (std::memcmp(block.data(), kFilterMagic, sizeof(kFilterMagic)) != 0) { return; }
 
-    const size_t name_len =
-        static_cast<unsigned char>(block[sizeof(kFilterMagic)]);
+    const size_t name_len = static_cast<unsigned char>(block[sizeof(kFilterMagic)]);
     const size_t name_start = sizeof(kFilterMagic) + 1;
     if (name_len > block.size() - name_start) { return; }
 
     const char *expected = filter_.name(filter_.state);
     if (expected == nullptr) { return; }
-    if (std::string_view(block.data() + name_start, name_len) !=
-        std::string_view(expected)) {
-        return;
-    }
+    if (std::string_view(block.data() + name_start, name_len) != std::string_view(expected)) { return; }
 
     const size_t count_offset = name_start + name_len;
     if (block.size() - count_offset < sizeof(uint32_t)) { return; }

@@ -26,8 +26,7 @@ namespace ANCHORDB_NAMESPACE {
 // Decodes the trailing 8 bytes of an internal key into sequence number and
 // entry type. Layout: | user_key (n-8 bytes) | sequence (7 bytes,
 // little-endian) | type (1 byte) |
-bool parse_internal_key(std::string_view internal_key,
-                        ParsedInternalKey *result) {
+bool parse_internal_key(std::string_view internal_key, ParsedInternalKey *result) {
     const size_t n = internal_key.size();
     if (n < 8) return false;
 
@@ -47,9 +46,7 @@ void append_blob_handle(std::string *dst, const BlobHandle &handle) {
 }
 
 bool parse_blob_handle(std::string_view encoded, BlobHandle *handle) {
-    if (handle == nullptr || encoded.size() != kBlobHandleEncodedSize) {
-        return false;
-    }
+    if (handle == nullptr || encoded.size() != kBlobHandleEncodedSize) { return false; }
     const char *p = encoded.data();
     handle->file_id = decode_fixed_32(p);
     handle->size = decode_fixed_32(p + sizeof(uint32_t));

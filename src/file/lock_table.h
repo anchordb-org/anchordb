@@ -39,8 +39,7 @@ inline int lock_or_unlock(int fd, bool lock) {
 // A held POSIX advisory lock: the fd it was taken on and the locked file name.
 class PosixFileLock : public FileLock {
   public:
-    PosixFileLock(int fd, std::string filename)
-        : fd_(fd), filename_(std::move(filename)) {}
+    PosixFileLock(int fd, std::string filename) : fd_(fd), filename_(std::move(filename)) {}
 
     int fd() const { return fd_; }
     const std::string &filename() const { return filename_; }

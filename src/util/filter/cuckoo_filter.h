@@ -32,9 +32,7 @@ static constexpr size_t kMaxReallocations = 500;
 
 namespace {
 
-inline uint32_t cuckoo_hash(std::string_view key) {
-    return murmurhash2_32(key.data(), key.size(), 0xbd1e2a57);
-}
+inline uint32_t cuckoo_hash(std::string_view key) { return murmurhash2_32(key.data(), key.size(), 0xbd1e2a57); }
 
 // Returns a non-zero 1-byte fingerprint.  0 is reserved as the empty-slot
 // marker.
@@ -46,9 +44,7 @@ inline uint8_t cuckoo_fingerprint(uint32_t h) {
 // num_buckets must be a power of two.  Using masking instead of modulo
 // preserves the fundamental cuckoo invariant:
 //   alt(alt(i, fp), fp) == i
-inline size_t cuckoo_index1(uint32_t h, size_t num_buckets) {
-    return (h >> 8) & (num_buckets - 1);
-}
+inline size_t cuckoo_index1(uint32_t h, size_t num_buckets) { return (h >> 8) & (num_buckets - 1); }
 
 inline size_t cuckoo_index2(size_t index1, uint8_t fp, size_t num_buckets) {
     const uint32_t fp_hash = fp * 0x5bd1e995; // MurmurHash2 mixing constant
@@ -66,19 +62,12 @@ inline uint32_t cuckoo_rand(uint32_t &state) {
 
 } // namespace
 
-inline const char *cuckoo_name(const void *state_ptr) {
-    return "anchordb.BuiltinCuckooFilter";
-}
+inline const char *cuckoo_name(const void *state_ptr) { return "anchordb.BuiltinCuckooFilter"; }
 
-void cuckoo_create(const void *state_ptr, const std::string_view *keys,
-                   size_t n, std::string *dst);
+void cuckoo_create(const void *state_ptr, const std::string_view *keys, size_t n, std::string *dst);
 
-bool cuckoo_match(const void *state_ptr, std::string_view key,
-                  std::string_view cuckoo_filter);
+bool cuckoo_match(const void *state_ptr, std::string_view key, std::string_view cuckoo_filter);
 
-inline Filter make_cuckoo_filter() {
-    return Filter{nullptr, &cuckoo_name, &cuckoo_create, &cuckoo_match,
-                  nullptr};
-}
+inline Filter make_cuckoo_filter() { return Filter{nullptr, &cuckoo_name, &cuckoo_create, &cuckoo_match, nullptr}; }
 
 } // namespace ANCHORDB_NAMESPACE

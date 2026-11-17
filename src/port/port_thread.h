@@ -34,10 +34,8 @@
 using NativeThreadHandle = HANDLE;
 using NativeThreadEntry = unsigned(__stdcall *)(void *);
 
-inline bool thread_create(NativeThreadHandle &handle, NativeThreadEntry entry,
-                          void *arg) {
-    handle = reinterpret_cast<HANDLE>(
-        ::_beginthreadex(nullptr, 0, entry, arg, 0, nullptr));
+inline bool thread_create(NativeThreadHandle &handle, NativeThreadEntry entry, void *arg) {
+    handle = reinterpret_cast<HANDLE>(::_beginthreadex(nullptr, 0, entry, arg, 0, nullptr));
     return handle != nullptr;
 }
 
@@ -53,13 +51,10 @@ inline void thread_join(NativeThreadHandle handle) {
 using NativeThreadHandle = pthread_t;
 using NativeThreadEntry = void *(*)(void *);
 
-inline bool thread_create(NativeThreadHandle &handle, NativeThreadEntry entry,
-                          void *arg) {
+inline bool thread_create(NativeThreadHandle &handle, NativeThreadEntry entry, void *arg) {
     return ::pthread_create(&handle, nullptr, entry, arg) == 0;
 }
 
-inline void thread_join(NativeThreadHandle handle) {
-    ::pthread_join(handle, nullptr);
-}
+inline void thread_join(NativeThreadHandle handle) { ::pthread_join(handle, nullptr); }
 
 #endif

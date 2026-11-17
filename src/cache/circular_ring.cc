@@ -20,8 +20,7 @@
 namespace ANCHORDB_NAMESPACE {
 
 CircularRing::CircularRing(CircularRing &&other) noexcept
-    : head_(other.head_), index_map_(std::move(other.index_map_)),
-      size_(other.size_) {
+    : head_(other.head_), index_map_(std::move(other.index_map_)), size_(other.size_) {
     other.head_ = nullptr;
     other.size_ = 0;
 }
@@ -55,8 +54,7 @@ void CircularRing::push_back(HashedKey key, ClockProHandle *handle) {
     index_map_.insert(key, handle);
 }
 
-void CircularRing::insert_before(ClockProHandle *target,
-                                 ClockProHandle *handle) {
+void CircularRing::insert_before(ClockProHandle *target, ClockProHandle *handle) {
     assert(target != nullptr);
     assert(handle != nullptr);
     HashedKey key{handle->key(), handle->hash};
@@ -67,8 +65,7 @@ void CircularRing::insert_before(ClockProHandle *target,
     index_map_.insert(key, handle);
 }
 
-void CircularRing::insert_after(ClockProHandle *target,
-                                ClockProHandle *handle) {
+void CircularRing::insert_after(ClockProHandle *target, ClockProHandle *handle) {
     assert(target != nullptr);
     assert(handle != nullptr);
     HashedKey key{handle->key(), handle->hash};

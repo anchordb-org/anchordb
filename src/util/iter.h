@@ -30,8 +30,7 @@ class EmptyIterator : public Iterator {
     EmptyIterator(const Status &s) : status_(s) {}
     ~EmptyIterator() = default;
 
-    EmptyIterator(EmptyIterator &&other) noexcept
-        : status_(std::move(other.status_)) {}
+    EmptyIterator(EmptyIterator &&other) noexcept : status_(std::move(other.status_)) {}
     EmptyIterator &operator=(EmptyIterator &&other) {
         if (this != &other) { this->status_ = std::move(other.status_); }
         return *this;

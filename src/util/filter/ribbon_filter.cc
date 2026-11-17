@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "ribbon_filter.h"
 #include "anchordb/anchordb_namespace.h"
+#include "ribbon_filter.h"
 #include <algorithm>
 #include <bit>
 #include <cstddef>
@@ -25,8 +25,7 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-void ribbon_create(const void *state_ptr, const std::string_view *keys,
-                   size_t n, std::string *dst) {
+void ribbon_create(const void *state_ptr, const std::string_view *keys, size_t n, std::string *dst) {
     if (n == 0) return;
 
     auto *state = static_cast<const RibbonState *>(state_ptr);
@@ -52,8 +51,7 @@ void ribbon_create(const void *state_ptr, const std::string_view *keys,
     // Sort row indices by start column — required for banded elimination.
     std::vector<size_t> order(n);
     for (size_t i = 0; i < n; i++) order[i] = i;
-    std::sort(order.begin(), order.end(),
-              [&](size_t a, size_t b) { return start[a] < start[b]; });
+    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return start[a] < start[b]; });
 
     // Banded Gaussian elimination (forward pass)
     constexpr size_t k_no_pivot = std::numeric_limits<size_t>::max();
@@ -114,13 +112,10 @@ void ribbon_create(const void *state_ptr, const std::string_view *keys,
     dst->resize(init_size + 1 + num_bits, 0);
     char *array = &(*dst)[init_size];
     array[0] = static_cast<char>(k_ribbon_fingerprint_bits);
-    for (size_t i = 0; i < num_bits; i++) {
-        array[1 + i] = static_cast<char>(z[i]);
-    }
+    for (size_t i = 0; i < num_bits; i++) { array[1 + i] = static_cast<char>(z[i]); }
 }
 
-bool ribbon_match(const void *state_ptr, std::string_view key,
-                  std::string_view ribbon_filter) {
+bool ribbon_match(const void *state_ptr, std::string_view key, std::string_view ribbon_filter) {
     const size_t len = ribbon_filter.size();
     // Need at least 1 header byte + enough room for a ribbon.
     if (len <= k_ribbon_width + 1) return false;

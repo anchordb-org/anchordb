@@ -1,11 +1,5 @@
 {
   "name": "anchordb",
   "version-string": "1.0.0",
-  "dependencies": [
-    "zstd",
-    "snappy",
-    "lz4",
-    "zlib",
-    "gperftools"
-  ]
+  "dependencies": ["zstd", "snappy", "lz4", "zlib", "gperftools"]
 }

@@ -68,8 +68,7 @@ class TableReader {
     // are opened without a directory prefix.  On success stores a
     // heap-allocated reader in *result; the caller owns it.  On failure returns
     // a non-ok Status and leaves *result untouched.
-    static Status open(const Options &options, const TableFileSet &files,
-                       std::string db_dir, TableReader **result);
+    static Status open(const Options &options, const TableFileSet &files, std::string db_dir, TableReader **result);
 
     ~TableReader();
 
@@ -86,8 +85,7 @@ class TableReader {
     // Status::ok().  Returns Status::not_found when the key is absent or its
     // newest entry is a tombstone.  `scratch` is reusable per-call storage for
     // the raw data or vLog record.
-    Status get(const ReadOptions &options, std::string_view key,
-               std::string *value, std::string *scratch) const;
+    Status get(const ReadOptions &options, std::string_view key, std::string *value, std::string *scratch) const;
 
     // Returns a heap-allocated bidirectional iterator over the whole table
     // (caller deletes).  Tombstones are skipped; blobs are resolved through the
@@ -124,20 +122,17 @@ class TableReader {
     // Reads the index block at `block_offset` (on-disk length
     // `compressed_size`) and decompresses it when needed.  *out points into
     // *stored_buf or *plain_buf, whichever holds the parseable block.
-    Status read_index_block_(uint64_t block_offset, uint32_t compressed_size,
-                             std::string *stored_buf, std::string *plain_buf,
-                             std::string_view *out) const;
+    Status read_index_block_(uint64_t block_offset, uint32_t compressed_size, std::string *stored_buf,
+                             std::string *plain_buf, std::string_view *out) const;
 
     // Reads and validates the inline/tombstone data record selected by
     // `handle`.
-    Status read_inline_record_(const ValueHandle &handle,
-                               std::string_view expected_key,
-                               std::string *value, std::string *scratch) const;
+    Status read_inline_record_(const ValueHandle &handle, std::string_view expected_key, std::string *value,
+                               std::string *scratch) const;
 
     // Reads and validates the vLog record selected by `handle`.  The handle's
     // offset and size cover the whole record, starting at its header.
-    Status read_blob_record_(const ValueHandle &handle,
-                             std::string_view expected_key, std::string *value,
+    Status read_blob_record_(const ValueHandle &handle, std::string_view expected_key, std::string *value,
                              std::string *scratch) const;
 
     // Returns the cached descriptor for `file_id`, opening the vLog file on

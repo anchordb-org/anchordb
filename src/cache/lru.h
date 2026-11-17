@@ -41,15 +41,10 @@ namespace ANCHORDB_NAMESPACE {
 // once usage exceeds capacity.
 class LRUCache {
   public:
-    explicit LRUCache(size_t capacity = 0, MapType t = MapType::Swiss)
-        : capacity_(capacity), usage_(0) {
+    explicit LRUCache(size_t capacity = 0, MapType t = MapType::Swiss) : capacity_(capacity), usage_(0) {
         switch (t) {
-        case MapType::LinearProbing:
-            map_.emplace<LinearProbingMap<LRUHandle *>>(capacity_);
-            break;
-        case MapType::RobbinHood:
-            map_.emplace<RobinHoodMap<LRUHandle *>>(capacity_);
-            break;
+        case MapType::LinearProbing: map_.emplace<LinearProbingMap<LRUHandle *>>(capacity_); break;
+        case MapType::RobbinHood: map_.emplace<RobinHoodMap<LRUHandle *>>(capacity_); break;
         case MapType::Swiss: map_.emplace<SwissMap<LRUHandle *>>(capacity_);
         }
     }
@@ -86,8 +81,7 @@ class LRUCache {
 
     void set_capacity(size_t capacity) { capacity_ = capacity; }
 
-    Cache::Handle *insert(std::string_view key, uint64_t hash, void *value,
-                          size_t charge,
+    Cache::Handle *insert(std::string_view key, uint64_t hash, void *value, size_t charge,
                           void (*deleter)(std::string_view key, void *value));
     Cache::Handle *lookup(std::string_view key, uint64_t hash);
     void release(Cache::Handle *handle);
@@ -111,9 +105,7 @@ class LRUCache {
 
     List<LRUHandle *> lru_;
     List<LRUHandle *> in_use_;
-    std::variant<LinearProbingMap<LRUHandle *>, RobinHoodMap<LRUHandle *>,
-                 SwissMap<LRUHandle *>>
-        map_;
+    std::variant<LinearProbingMap<LRUHandle *>, RobinHoodMap<LRUHandle *>, SwissMap<LRUHandle *>> map_;
 };
 
 // Shards an LRU cache across kNumShards independent sub-caches, picking the
@@ -123,16 +115,13 @@ class ShardedLRUCache : public Cache {
     explicit ShardedLRUCache(size_t capacity, MapType t) : last_id_(0) {
         shard_.reserve(kNumShards);
         const size_t per_shard = (capacity + (kNumShards - 1)) / kNumShards;
-        for (int s = 0; s < kNumShards; ++s) {
-            shard_.emplace_back(per_shard, t);
-        }
+        for (int s = 0; s < kNumShards; ++s) { shard_.emplace_back(per_shard, t); }
     }
 
     ~ShardedLRUCache() override {};
 
     Handle *insert(std::string_view key, void *value, size_t charge,
-                   void (*deleter)(std::string_view key,
-                                   void *value)) override {
+                   void (*deleter)(std::string_view key, void *value)) override {
         const uint64_t hash = hash_slice(key);
         return shard_[shard(hash)].insert(key, hash, value, charge, deleter);
     }
@@ -152,9 +141,7 @@ class ShardedLRUCache : public Cache {
         shard_[shard(hash)].erase(key, hash);
     }
 
-    void *value(Handle *handle) override {
-        return reinterpret_cast<LRUHandle *>(handle)->value;
-    }
+    void *value(Handle *handle) override { return reinterpret_cast<LRUHandle *>(handle)->value; }
 
     uint64_t new_id() override {
         id_mutex_.lock();
@@ -169,9 +156,7 @@ class ShardedLRUCache : public Cache {
 
     size_t total_charge() const override {
         size_t total = 0;
-        for (int s = 0; s < kNumShards; s++) {
-            total += shard_[s].total_charge();
-        }
+        for (int s = 0; s < kNumShards; s++) { total += shard_[s].total_charge(); }
         return total;
     }
 
@@ -181,13 +166,9 @@ class ShardedLRUCache : public Cache {
     std::mutex id_mutex_;
     uint64_t last_id_;
 
-    static inline uint64_t hash_slice(std::string_view s) {
-        return xx_hash64(s);
-    }
+    static inline uint64_t hash_slice(std::string_view s) { return xx_hash64(s); }
 
-    static uint64_t shard(uint64_t hash) {
-        return hash >> (64 - kNumShardBits);
-    }
+    static uint64_t shard(uint64_t hash) { return hash >> (64 - kNumShardBits); }
 };
 
 } // namespace ANCHORDB_NAMESPACE

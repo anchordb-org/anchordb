@@ -27,13 +27,10 @@ namespace ANCHORDB_NAMESPACE {
 // fsyncs the parent directory.
 class PosixWritableFileWriter final : public WritableFileWriter {
   public:
-    PosixWritableFileWriter(std::string filename, int fd, struct io_uring *ring,
-                            AlignedBuffer *buf = nullptr, bool direct_io = true,
-                            uint64_t initial_filesize = 0)
-        : filename_(std::move(filename)), fd_(fd), ring_(ring),
-          filesize_(initial_filesize), direct_io_(direct_io),
-          buf_offset_(initial_filesize), is_manifest_(is_manifest(filename_)),
-          dirname_(dirname(filename_)) {
+    PosixWritableFileWriter(std::string filename, int fd, struct io_uring *ring, AlignedBuffer *buf = nullptr,
+                            bool direct_io = true, uint64_t initial_filesize = 0)
+        : filename_(std::move(filename)), fd_(fd), ring_(ring), filesize_(initial_filesize), direct_io_(direct_io),
+          buf_offset_(initial_filesize), is_manifest_(is_manifest(filename_)), dirname_(dirname(filename_)) {
         if (buf != nullptr) {
             buf_ = std::move(*buf);
         } else {
@@ -59,9 +56,7 @@ class PosixWritableFileWriter final : public WritableFileWriter {
     std::string dirname(const std::string &filename);
     std::string_view basename(const std::string &filename);
 
-    bool is_manifest(const std::string &filename) {
-        return basename(filename).starts_with("MANIFEST");
-    }
+    bool is_manifest(const std::string &filename) { return basename(filename).starts_with("MANIFEST"); }
 
     const std::string filename_;
     const bool is_manifest_;

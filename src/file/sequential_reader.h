@@ -29,24 +29,19 @@ namespace ANCHORDB_NAMESPACE {
 // buffer; otherwise one is allocated on demand.
 class PosixSequentialFileReader final : public SequentialFileReader {
   public:
-    PosixSequentialFileReader(std::string filename, int fd,
-                              struct io_uring *ring,
-                              AlignedBuffer *buf = nullptr,
+    PosixSequentialFileReader(std::string filename, int fd, struct io_uring *ring, AlignedBuffer *buf = nullptr,
                               size_t buffer_size = 0, bool direct_io = false)
-        : fd_(fd), filename_(std::move(filename)), ring_(ring), offset_(0),
-          direct_io_(direct_io), buf_file_offset_(0), buf_bytes_valid_(0) {
+        : fd_(fd), filename_(std::move(filename)), ring_(ring), offset_(0), direct_io_(direct_io), buf_file_offset_(0),
+          buf_bytes_valid_(0) {
         if (buf != nullptr) {
             buf_ = std::move(*buf);
         } else if (direct_io_) {
-            size_t buf_size =
-                (buffer_size != 0) ? buffer_size : kSeqFileReaderBufSize;
+            size_t buf_size = (buffer_size != 0) ? buffer_size : kSeqFileReaderBufSize;
             buf_ = AlignedBuffer(buf_size, kDirectIOAlignment);
         }
 
         struct stat file_stat;
-        if (fstat(fd_, &file_stat) == 0) {
-            file_size_ = static_cast<size_t>(file_stat.st_size);
-        }
+        if (fstat(fd_, &file_stat) == 0) { file_size_ = static_cast<size_t>(file_stat.st_size); }
     }
 
     ~PosixSequentialFileReader() override {
@@ -58,8 +53,7 @@ class PosixSequentialFileReader final : public SequentialFileReader {
     size_t size() override { return file_size_; }
 
   private:
-    Status submit_read_(void *dst, size_t len, uint64_t offset,
-                        size_t *bytes_read);
+    Status submit_read_(void *dst, size_t len, uint64_t offset, size_t *bytes_read);
 
     const int fd_;
     size_t file_size_ = 0;

@@ -41,8 +41,7 @@ struct ANCHORDB_EXPORT Comparator {
     // Given `*start` and `limit` (both >= *start), may replace `*start` with a
     // shorter key `s` such that *start <= s < limit.  Used to compact index
     // blocks.
-    void (*find_shortest_separator)(std::string *start,
-                                    std::string_view limit) = nullptr;
+    void (*find_shortest_separator)(std::string *start, std::string_view limit) = nullptr;
 
     // If possible, replaces `*key` with a short key that sorts immediately
     // after it, for index compaction.  May leave `*key` unchanged.

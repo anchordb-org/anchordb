@@ -43,12 +43,9 @@ std::string_view MemtableIterator::value() const {
     // Internal key, then the length-prefixed value bytes.
     std::string_view key_slice = get_len_prefixed_slice(iter_.key());
     const char *value_ptr = key_slice.data() + key_slice.size();
-    const uint64_t tag =
-        decode_fixed_64(key_slice.data() + key_slice.size() - 8);
+    const uint64_t tag = decode_fixed_64(key_slice.data() + key_slice.size() - 8);
 
-    if (static_cast<EntryType>(tag & 0xff) != EntryType::Blob) {
-        return get_len_prefixed_slice(value_ptr);
-    }
+    if (static_cast<EntryType>(tag & 0xff) != EntryType::Blob) { return get_len_prefixed_slice(value_ptr); }
 
     std::string_view encoded = get_len_prefixed_slice(value_ptr);
     BlobHandle handle;
@@ -67,11 +64,8 @@ std::string_view MemtableIterator::value() const {
     return value_scratch_;
 }
 
-Status MemTable::add(seq_num seq, EntryType type, std::string_view key,
-                     std::string_view value) {
-    if (key.size() > max_key_size_) {
-        return Status::invalid_argument("memtable: key too large");
-    }
+Status MemTable::add(seq_num seq, EntryType type, std::string_view key, std::string_view value) {
+    if (key.size() > max_key_size_) { return Status::invalid_argument("memtable: key too large"); }
 
     // Large inline values live in the value log.  The memtable entry keeps a
     // BlobHandle (file id, record size, record offset) as its value bytes and
@@ -80,12 +74,10 @@ Status MemTable::add(seq_num seq, EntryType type, std::string_view key,
     EntryType stored_type = type;
     std::string_view stored_value = value;
     std::string blob_handle;
-    if (vlog_writer_ != nullptr && type == EntryType::Inline &&
-        value.size() > value_threshold_) {
+    if (vlog_writer_ != nullptr && type == EntryType::Inline && value.size() > value_threshold_) {
         const uint64_t timestamp = env_ != nullptr ? env_->now_micros() : 0;
         DataRecordLocation location;
-        Status s = vlog_writer_->add(key, value, EntryType::Blob, timestamp,
-                                     &location);
+        Status s = vlog_writer_->add(key, value, EntryType::Blob, timestamp, &location);
         if (!s.is_ok()) { return s; }
         // Make the record visible to a reader that opens the file separately.
         s = vlog_writer_->flush();
@@ -107,8 +99,7 @@ Status MemTable::add(seq_num seq, EntryType type, std::string_view key,
         return Status::invalid_argument("memtable: entry too large");
     }
     size_t internal_key_size = key_size + 8;
-    const size_t encoded_len = varint_len(key_size) + internal_key_size +
-                               varint_len(value_size) + value_size;
+    const size_t encoded_len = varint_len(key_size) + internal_key_size + varint_len(value_size) + value_size;
     char *buf = arena_.allocate(encoded_len);
     char *p = encode_varint_32(buf, internal_key_size);
     if (key_size != 0) { std::memcpy(p, key.data(), key_size); }
@@ -130,8 +121,7 @@ bool MemTable::get(const LookUpKey &key, std::string *value, Status *s) {
         const char *entry = iter.key();
         uint32_t key_len;
         const char *key_ptr = get_varint_32_ptr(entry, entry + 5, &key_len);
-        if (comparator_.compare(std::string_view(key_ptr, key_len - 8),
-                                key.user_key()) == 0) {
+        if (comparator_.compare(std::string_view(key_ptr, key_len - 8), key.user_key()) == 0) {
             const uint64_t tag = decode_fixed_64(key_ptr + key_len - 8);
             switch (static_cast<EntryType>(tag & 0xff)) {
             case EntryType::Inline: {
@@ -144,8 +134,7 @@ bool MemTable::get(const LookUpKey &key, std::string *value, Status *s) {
                 return false;
             }
             case EntryType::Blob: {
-                std::string_view encoded =
-                    get_len_prefixed_slice(key_ptr + key_len);
+                std::string_view encoded = get_len_prefixed_slice(key_ptr + key_len);
                 BlobHandle handle;
                 if (!parse_blob_handle(encoded, &handle)) {
                     *s = Status::corruption("memtable: invalid blob handle");
@@ -164,18 +153,11 @@ bool MemTable::get(const LookUpKey &key, std::string *value, Status *s) {
     return false;
 }
 
-Status MemTable::read_blob_(const BlobHandle &handle,
-                            std::string_view expected_key,
-                            std::string *value) const {
-    if (value == nullptr) {
-        return Status::invalid_argument("memtable: null value");
-    }
-    if (env_ == nullptr) {
-        return Status::not_supported("memtable: no env for blob read");
-    }
+Status MemTable::read_blob_(const BlobHandle &handle, std::string_view expected_key, std::string *value) const {
+    if (value == nullptr) { return Status::invalid_argument("memtable: null value"); }
+    if (env_ == nullptr) { return Status::not_supported("memtable: no env for blob read"); }
     if (handle.size < kDataRecordHeaderSize) {
-        return Status::corruption("memtable: vlog record size too small",
-                                  std::to_string(handle.size));
+        return Status::corruption("memtable: vlog record size too small", std::to_string(handle.size));
     }
 
     const std::string fname = vlog_filename(vlog_dbname_, handle.file_id);
@@ -183,8 +165,7 @@ Status MemTable::read_blob_(const BlobHandle &handle,
     Status s = env_->get_file_size(fname, &file_size);
     if (!s.is_ok()) { return s; }
     if (handle.offset > file_size || handle.size > file_size - handle.offset) {
-        return Status::corruption("memtable: vlog record out of range",
-                                  std::to_string(handle.offset));
+        return Status::corruption("memtable: vlog record out of range", std::to_string(handle.offset));
     }
 
     RandomAccessFileReader *reader = nullptr;
@@ -198,8 +179,7 @@ Status MemTable::read_blob_(const BlobHandle &handle,
     delete reader;
     if (!s.is_ok()) { return s; }
     if (view.size() != handle.size) {
-        return Status::corruption("memtable: vlog record short read",
-                                  std::to_string(view.size()));
+        return Status::corruption("memtable: vlog record short read", std::to_string(view.size()));
     }
 
     DataRecordBufferReader record_reader(view);
@@ -208,15 +188,9 @@ Status MemTable::read_blob_(const BlobHandle &handle,
     s = record_reader.next(&record, &done);
     if (!s.is_ok()) { return s; }
     if (done) { return Status::corruption("memtable: vlog record missing"); }
-    if (!record_reader.done()) {
-        return Status::corruption("memtable: vlog record has trailing bytes");
-    }
-    if (!record.is_blob()) {
-        return Status::corruption("memtable: vlog record is not a blob");
-    }
-    if (record.key != expected_key) {
-        return Status::corruption("memtable: vlog record key mismatch");
-    }
+    if (!record_reader.done()) { return Status::corruption("memtable: vlog record has trailing bytes"); }
+    if (!record.is_blob()) { return Status::corruption("memtable: vlog record is not a blob"); }
+    if (record.key != expected_key) { return Status::corruption("memtable: vlog record key mismatch"); }
 
     value->assign(record.value.data(), record.value.size());
     return Status::ok();

@@ -38,12 +38,10 @@ inline size_t truncate_to_page_boundary(size_t page_size, size_t s) {
 
 class AlignedBuffer {
   public:
-    AlignedBuffer()
-        : bufstart_(nullptr), capacity_(0), cursize_(0), alignment_(4096) {}
+    AlignedBuffer() : bufstart_(nullptr), capacity_(0), cursize_(0), alignment_(4096) {}
 
     explicit AlignedBuffer(size_t capacity, size_t alignment = 4096)
-        : bufstart_(nullptr), capacity_(round_up(capacity, alignment)),
-          cursize_(0), alignment_(alignment) {
+        : bufstart_(nullptr), capacity_(round_up(capacity, alignment)), cursize_(0), alignment_(alignment) {
         allocate();
     }
 
@@ -53,8 +51,8 @@ class AlignedBuffer {
     AlignedBuffer &operator=(const AlignedBuffer &) = delete;
 
     AlignedBuffer(AlignedBuffer &&other) noexcept
-        : bufstart_(other.bufstart_), capacity_(other.capacity_),
-          cursize_(other.cursize_), alignment_(other.alignment_) {
+        : bufstart_(other.bufstart_), capacity_(other.capacity_), cursize_(other.cursize_),
+          alignment_(other.alignment_) {
         other.bufstart_ = nullptr;
         other.capacity_ = 0;
         other.cursize_ = 0;
@@ -74,8 +72,7 @@ class AlignedBuffer {
         return *this;
     }
 
-    void re_allocate(size_t req_capacity, bool copy_data = false,
-                     uint64_t copy_offset = 0, size_t copy_len = 0) {
+    void re_allocate(size_t req_capacity, bool copy_data = false, uint64_t copy_offset = 0, size_t copy_len = 0) {
         assert(alignment_ > 0);
         assert((alignment_ & (alignment_ - 1)) == 0);
 
@@ -121,9 +118,7 @@ class AlignedBuffer {
         assert(offset < cursize_);
 
         size_t to_read = 0;
-        if (offset < cursize_) {
-            to_read = std::min(cursize_ - offset, read_size);
-        }
+        if (offset < cursize_) { to_read = std::min(cursize_ - offset, read_size); }
         if (to_read > 0) { memcpy(dest, bufstart_ + offset, to_read); }
         return to_read;
     }

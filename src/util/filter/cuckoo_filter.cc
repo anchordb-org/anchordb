@@ -19,15 +19,13 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-void cuckoo_create(const void *state_ptr, const std::string_view *keys,
-                   size_t n, std::string *dst) {
+void cuckoo_create(const void *state_ptr, const std::string_view *keys, size_t n, std::string *dst) {
     if (n == 0) return;
 
     // Number of buckets: smallest power of two that keeps the load factor
     // at or below 50 % (two slots per key on average).
     size_t num_buckets = 4;
-    const size_t min_buckets =
-        (n + kCuckooSlotsPerBucket - 1) / kCuckooSlotsPerBucket * 2;
+    const size_t min_buckets = (n + kCuckooSlotsPerBucket - 1) / kCuckooSlotsPerBucket * 2;
     while (num_buckets < min_buckets) num_buckets <<= 1;
 
     const size_t total_bytes = num_buckets * kCuckooSlotsPerBucket;
@@ -53,8 +51,7 @@ void cuckoo_create(const void *state_ptr, const std::string_view *keys,
         if (!inserted) {
             for (size_t s = 0; s < kCuckooSlotsPerBucket; s++) {
                 if (buckets[i2 * kCuckooSlotsPerBucket + s] == 0) {
-                    buckets[i2 * kCuckooSlotsPerBucket + s] =
-                        static_cast<char>(fp);
+                    buckets[i2 * kCuckooSlotsPerBucket + s] = static_cast<char>(fp);
                     inserted = true;
                     break;
                 }
@@ -69,8 +66,7 @@ void cuckoo_create(const void *state_ptr, const std::string_view *keys,
 
         for (size_t loop = 0; loop < kMaxReallocations; loop++) {
             const size_t slot = cuckoo_rand(rng) % kCuckooSlotsPerBucket;
-            char *slot_ptr =
-                &buckets[curr_index * kCuckooSlotsPerBucket + slot];
+            char *slot_ptr = &buckets[curr_index * kCuckooSlotsPerBucket + slot];
             const uint8_t old_fp = static_cast<uint8_t>(*slot_ptr);
             *slot_ptr = static_cast<char>(curr_fp);
 
@@ -81,8 +77,7 @@ void cuckoo_create(const void *state_ptr, const std::string_view *keys,
             bool placed = false;
             for (size_t s = 0; s < kCuckooSlotsPerBucket; s++) {
                 if (buckets[curr_index * kCuckooSlotsPerBucket + s] == 0) {
-                    buckets[curr_index * kCuckooSlotsPerBucket + s] =
-                        static_cast<char>(curr_fp);
+                    buckets[curr_index * kCuckooSlotsPerBucket + s] = static_cast<char>(curr_fp);
                     placed = true;
                     break;
                 }
@@ -95,8 +90,7 @@ void cuckoo_create(const void *state_ptr, const std::string_view *keys,
     }
 }
 
-bool cuckoo_match(const void *state_ptr, std::string_view key,
-                  std::string_view cuckoo_filter) {
+bool cuckoo_match(const void *state_ptr, std::string_view key, std::string_view cuckoo_filter) {
     const size_t len = cuckoo_filter.size();
     if (len == 0 || len % kCuckooSlotsPerBucket != 0) return false;
 
@@ -109,12 +103,10 @@ bool cuckoo_match(const void *state_ptr, std::string_view key,
     const size_t i2 = cuckoo_index2(i1, fp, num_buckets);
 
     for (size_t s = 0; s < kCuckooSlotsPerBucket; s++) {
-        if (static_cast<uint8_t>(buckets[i1 * kCuckooSlotsPerBucket + s]) == fp)
-            return true;
+        if (static_cast<uint8_t>(buckets[i1 * kCuckooSlotsPerBucket + s]) == fp) return true;
     }
     for (size_t s = 0; s < kCuckooSlotsPerBucket; s++) {
-        if (static_cast<uint8_t>(buckets[i2 * kCuckooSlotsPerBucket + s]) == fp)
-            return true;
+        if (static_cast<uint8_t>(buckets[i2 * kCuckooSlotsPerBucket + s]) == fp) return true;
     }
     return false;
 }

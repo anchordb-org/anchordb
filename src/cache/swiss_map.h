@@ -30,8 +30,7 @@ namespace ANCHORDB_NAMESPACE {
 template <typename T> class SwissMap {
   public:
     explicit SwissMap(size_t initial_capacity = 16)
-        : capacity_(round_upto_power_of_two_(initial_capacity)), size_(0),
-          num_deleted_(0) {
+        : capacity_(round_upto_power_of_two_(initial_capacity)), size_(0), num_deleted_(0) {
         // controls_ is over-allocated by one group width. The trailing bytes
         // mirror the first group and are kept in sync by set_control_(), which
         // lets a SIMD group load that crosses the end of the table observe the
@@ -82,13 +81,9 @@ template <typename T> class SwissMap {
     size_t size_;
     size_t num_deleted_;
 
-    static int8_t extract_h2_(uint64_t hash) {
-        return static_cast<int8_t>((hash >> 57) & 0x7F);
-    }
+    static int8_t extract_h2_(uint64_t hash) { return static_cast<int8_t>((hash >> 57) & 0x7F); }
 
-    size_t mask_(uint64_t hash) const {
-        return static_cast<size_t>(hash & (capacity_ - 1));
-    }
+    size_t mask_(uint64_t hash) const { return static_cast<size_t>(hash & (capacity_ - 1)); }
 
     static size_t round_upto_power_of_two_(size_t val) {
         size_t cap = 16;
@@ -99,8 +94,7 @@ template <typename T> class SwissMap {
     // Compares the group of kGroupWidth control bytes starting at `group`
     // against the 7-bit fingerprint `h2`.  Returns a bitmask whose set bits
     // index lanes equal to h2, and sets `has_empty` if any lane is CTRL_EMPTY.
-    static uint32_t match_group_(const int8_t *group, int8_t h2,
-                                 bool &has_empty);
+    static uint32_t match_group_(const int8_t *group, int8_t h2, bool &has_empty);
 
     // Writes a control byte, mirroring it into the trailing padding group when
     // it falls in the first group so wrap-around SIMD loads stay consistent.
@@ -129,8 +123,7 @@ inline int count_trailing_zeros_(uint32_t x) {
 // Extracts a 16-bit lane mask from an ARM NEON 128-bit comparison vector,
 // equivalent to x86's _mm_movemask_epi8.
 uint32_t neon_mask_to_bitmask_(uint8x16_t mask_vec) {
-    static const uint8_t bit_weights[16] = {1, 2, 4, 8, 16, 32, 64, 128,
-                                            1, 2, 4, 8, 16, 32, 64, 128};
+    static const uint8_t bit_weights[16] = {1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128};
     const uint8x16_t weights = vld1q_u8(bit_weights);
     const uint8x16_t masked = vandq_u8(mask_vec, weights);
 
@@ -146,28 +139,19 @@ uint32_t neon_mask_to_bitmask_(uint8x16_t mask_vec) {
 
 } // namespace
 
-template <typename T>
-uint32_t SwissMap<T>::match_group_(const int8_t *group, int8_t h2,
-                                   bool &has_empty) {
+template <typename T> uint32_t SwissMap<T>::match_group_(const int8_t *group, int8_t h2, bool &has_empty) {
 #if defined(HAS_X86)
     // x86 SSE2: load 16 control bytes and compare them in one shot.
-    const __m128i group_vec =
-        _mm_loadu_si128(reinterpret_cast<const __m128i *>(group));
-    const uint32_t match_mask = static_cast<uint32_t>(
-        _mm_movemask_epi8(_mm_cmpeq_epi8(group_vec, _mm_set1_epi8(h2))));
-    has_empty = _mm_movemask_epi8(
-                    _mm_cmpeq_epi8(group_vec, _mm_set1_epi8(kCtrlEmpty))) != 0;
+    const __m128i group_vec = _mm_loadu_si128(reinterpret_cast<const __m128i *>(group));
+    const uint32_t match_mask = static_cast<uint32_t>(_mm_movemask_epi8(_mm_cmpeq_epi8(group_vec, _mm_set1_epi8(h2))));
+    has_empty = _mm_movemask_epi8(_mm_cmpeq_epi8(group_vec, _mm_set1_epi8(kCtrlEmpty))) != 0;
     return match_mask;
 
 #elif defined(HAS_ARM)
     // ARM NEON: load 16 control bytes and compare them in one shot.
-    const uint8x16_t group_vec =
-        vld1q_u8(reinterpret_cast<const uint8_t *>(group));
-    const uint32_t match_mask = neon_mask_to_bitmask_(
-        vceqq_u8(group_vec, vdupq_n_u8(static_cast<uint8_t>(h2))));
-    has_empty =
-        neon_mask_to_bitmask_(vceqq_u8(
-            group_vec, vdupq_n_u8(static_cast<uint8_t>(kCtrlEmpty)))) != 0;
+    const uint8x16_t group_vec = vld1q_u8(reinterpret_cast<const uint8_t *>(group));
+    const uint32_t match_mask = neon_mask_to_bitmask_(vceqq_u8(group_vec, vdupq_n_u8(static_cast<uint8_t>(h2))));
+    has_empty = neon_mask_to_bitmask_(vceqq_u8(group_vec, vdupq_n_u8(static_cast<uint8_t>(kCtrlEmpty)))) != 0;
     return match_mask;
 
 #else
@@ -198,11 +182,9 @@ template <typename T> bool SwissMap<T>::contains(HashedKey key) const {
         // Process all SIMD matches.
         while (match_bitmask != 0) {
             const int bit_idx = count_trailing_zeros_(match_bitmask);
-            const size_t slot_idx =
-                (idx + static_cast<size_t>(bit_idx)) & (capacity_ - 1);
+            const size_t slot_idx = (idx + static_cast<size_t>(bit_idx)) & (capacity_ - 1);
 
-            if (slots_[slot_idx].hashed_key.hash == key.hash &&
-                slots_[slot_idx].hashed_key.key == key.key) {
+            if (slots_[slot_idx].hashed_key.hash == key.hash && slots_[slot_idx].hashed_key.key == key.key) {
                 return true;
             }
 
@@ -230,11 +212,9 @@ template <typename T> T SwissMap<T>::get(HashedKey key) const {
         // Process all SIMD matches.
         while (match_bitmask != 0) {
             const int bit_idx = count_trailing_zeros_(match_bitmask);
-            const size_t slot_idx =
-                (idx + static_cast<size_t>(bit_idx)) & (capacity_ - 1);
+            const size_t slot_idx = (idx + static_cast<size_t>(bit_idx)) & (capacity_ - 1);
 
-            if (slots_[slot_idx].hashed_key.hash == key.hash &&
-                slots_[slot_idx].hashed_key.key == key.key) {
+            if (slots_[slot_idx].hashed_key.hash == key.hash && slots_[slot_idx].hashed_key.key == key.key) {
                 return slots_[slot_idx].value;
             }
 
@@ -253,8 +233,7 @@ template <typename T> void SwissMap<T>::insert(HashedKey key, T value) {
     // Grow or purge tombstones once the combined (live + deleted) load would
     // exceed the maximum load factor.  Keeping this below 1 guarantees at
     // least one CTRL_EMPTY slot always exists, so probe sequences terminate.
-    if (size_ + num_deleted_ + 1 >
-        static_cast<size_t>(capacity_ * kMaxLoadFactor)) {
+    if (size_ + num_deleted_ + 1 > static_cast<size_t>(capacity_ * kMaxLoadFactor)) {
         if (size_ * 2 <= capacity_) {
             resize_(capacity_); // Rehash in place: drop tombstones.
         } else {
@@ -278,11 +257,9 @@ template <typename T> void SwissMap<T>::insert(HashedKey key, T value) {
         // Look for an existing entry to overwrite.
         while (match_bitmask != 0) {
             const int bit_idx = count_trailing_zeros_(match_bitmask);
-            const size_t slot_idx =
-                (idx + static_cast<size_t>(bit_idx)) & (capacity_ - 1);
+            const size_t slot_idx = (idx + static_cast<size_t>(bit_idx)) & (capacity_ - 1);
 
-            if (slots_[slot_idx].hashed_key.hash == key.hash &&
-                slots_[slot_idx].hashed_key.key == key.key) {
+            if (slots_[slot_idx].hashed_key.hash == key.hash && slots_[slot_idx].hashed_key.key == key.key) {
                 slots_[slot_idx].value = value;
                 return;
             }
@@ -330,11 +307,9 @@ template <typename T> T SwissMap<T>::remove(HashedKey key) {
 
         while (match_bitmask != 0) {
             const int bit_idx = count_trailing_zeros_(match_bitmask);
-            const size_t slot_idx =
-                (idx + static_cast<size_t>(bit_idx)) & (capacity_ - 1);
+            const size_t slot_idx = (idx + static_cast<size_t>(bit_idx)) & (capacity_ - 1);
 
-            if (slots_[slot_idx].hashed_key.hash == key.hash &&
-                slots_[slot_idx].hashed_key.key == key.key) {
+            if (slots_[slot_idx].hashed_key.hash == key.hash && slots_[slot_idx].hashed_key.key == key.key) {
                 result = slots_[slot_idx].value;
                 set_control_(slot_idx, kCtrlDeleted);
                 slots_[slot_idx] = Slot{};

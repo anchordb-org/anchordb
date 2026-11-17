@@ -43,20 +43,17 @@ struct ANCHORDB_EXPORT Compressor {
     // Compresses `length` bytes at `input` into an existing `*output` string,
     // using `level` as the codec-specific compression level.  Returns false on
     // failure.
-    bool (*compress)(const char *input, size_t length, std::string *output,
-                     int level) = nullptr;
+    bool (*compress)(const char *input, size_t length, std::string *output, int level) = nullptr;
 
     // Decompresses `length` bytes at `input` into `output`, which must be large
     // enough for the full uncompressed payload (see get_uncompressed_length).
     // Returns false on failure.
-    bool (*uncompress)(const char *input, size_t length,
-                       char *output) = nullptr;
+    bool (*uncompress)(const char *input, size_t length, char *output) = nullptr;
 
     // Reports the uncompressed size of the compressed block at `input`, so the
     // caller can size the destination buffer for uncompress().  Returns false
     // if the input is not a valid compressed block.
-    bool (*get_uncompressed_length)(const char *input, size_t length,
-                                    size_t *result) = nullptr;
+    bool (*get_uncompressed_length)(const char *input, size_t length, size_t *result) = nullptr;
 };
 
 Compressor ANCHORDB_EXPORT new_snappy_compressor();

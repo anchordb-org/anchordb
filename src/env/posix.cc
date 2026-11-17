@@ -44,9 +44,7 @@ namespace {
 
 std::atomic<uint64_t> g_next_env_id{1};
 
-uint64_t next_env_id() {
-    return g_next_env_id.fetch_add(1, std::memory_order_relaxed);
-}
+uint64_t next_env_id() { return g_next_env_id.fetch_add(1, std::memory_order_relaxed); }
 
 #if HAS_IO_URING
 // A thread-local io_uring ring owned by the thread that created it. Keying by
@@ -70,8 +68,7 @@ Env *create_default_env() { return new PosixEnv(); }
 PosixEnv::PosixEnv() : PosixEnv(1000, 256, ANCHORDB_DIRECT_IO_DEFAULT != 0) {}
 
 PosixEnv::PosixEnv(int max_open_files, uint32_t ring_entries, bool direct_io)
-    : direct_io_(direct_io), ring_entries_(ring_entries),
-      env_id_(next_env_id()), fd_limiter_(max_open_files) {
+    : direct_io_(direct_io), ring_entries_(ring_entries), env_id_(next_env_id()), fd_limiter_(max_open_files) {
     // Failure is not fatal: get_thread_local_ring() reports nullptr and the
     // I/O paths fall back to synchronous pread/pwrite. Construction must not
     // throw; the outcome is reported through ring_status().
@@ -82,25 +79,19 @@ PosixEnv::PosixEnv(int max_open_files, uint32_t ring_entries, bool direct_io)
         delete default_ring_;
         default_ring_ = nullptr;
         default_ring_valid_ = false;
-        ring_status_ = Status::io_error(std::string_view("io_uring_queue_init"),
-                                        std::strerror(-ret));
+        ring_status_ = Status::io_error(std::string_view("io_uring_queue_init"), std::strerror(-ret));
     } else {
         default_ring_valid_ = true;
         ring_status_ = Status::ok();
     }
 #else
     default_ring_valid_ = false;
-    ring_status_ = Status::not_supported(
-        std::string_view("io_uring support not compiled in"));
+    ring_status_ = Status::not_supported(std::string_view("io_uring support not compiled in"));
 #endif
 }
 
-Status PosixEnv::create(int max_open_files, uint32_t ring_entries,
-                        bool direct_io, PosixEnv **result) {
-    if (result == nullptr) {
-        return Status::invalid_argument(
-            std::string_view("PosixEnv::create: result is null"));
-    }
+Status PosixEnv::create(int max_open_files, uint32_t ring_entries, bool direct_io, PosixEnv **result) {
+    if (result == nullptr) { return Status::invalid_argument(std::string_view("PosixEnv::create: result is null")); }
     PosixEnv *env = new PosixEnv(max_open_files, ring_entries, direct_io);
     *result = env;
     return env->ring_status();
@@ -116,9 +107,7 @@ PosixEnv::~PosixEnv() {
 
 #if HAS_IO_URING
     // Destroy the shared default ring, but only if it was initialized.
-    if (default_ring_valid_ && default_ring_ != nullptr) {
-        io_uring_queue_exit(default_ring_);
-    }
+    if (default_ring_valid_ && default_ring_ != nullptr) { io_uring_queue_exit(default_ring_); }
     delete default_ring_;
     default_ring_ = nullptr;
 #endif
@@ -135,9 +124,7 @@ struct io_uring *PosixEnv::get_thread_local_ring() {
     }
 
     auto ring = std::make_unique<struct io_uring>();
-    if (io_uring_queue_init(ring_entries_, ring.get(), 0) < 0) {
-        return default_ring_valid_ ? default_ring_ : nullptr;
-    }
+    if (io_uring_queue_init(ring_entries_, ring.get(), 0) < 0) { return default_ring_valid_ ? default_ring_ : nullptr; }
 
     struct io_uring *raw_ring = ring.get();
     tls_rings.push_back(TlsRingEntry{env_id_, std::move(ring)});
@@ -145,8 +132,7 @@ struct io_uring *PosixEnv::get_thread_local_ring() {
 #endif
 }
 
-Status PosixEnv::new_sequential_file_reader(const std::string &filename,
-                                            SequentialFileReader **result,
+Status PosixEnv::new_sequential_file_reader(const std::string &filename, SequentialFileReader **result,
                                             size_t buffer_size) {
     struct io_uring *ring = get_thread_local_ring();
 
@@ -156,18 +142,14 @@ Status PosixEnv::new_sequential_file_reader(const std::string &filename,
     int fd = ::open(filename.c_str(), flags, 0);
     if (fd < 0) { return posix_error(filename, errno); }
 
-    size_t buf_size =
-        (buffer_size != 0) ? buffer_size : kSeqFileReaderBufSize;
+    size_t buf_size = (buffer_size != 0) ? buffer_size : kSeqFileReaderBufSize;
     AlignedBuffer buf(buf_size, kDirectIOAlignment);
-    *result = new PosixSequentialFileReader(filename, fd, ring, &buf, buf_size,
-                                            direct_io_);
+    *result = new PosixSequentialFileReader(filename, fd, ring, &buf, buf_size, direct_io_);
 
     return Status::ok();
 }
 
-Status
-PosixEnv::new_random_access_file_reader(const std::string &filename,
-                                        RandomAccessFileReader **result) {
+Status PosixEnv::new_random_access_file_reader(const std::string &filename, RandomAccessFileReader **result) {
     int fd = -1;
 
     // Calling thread's io_uring ring (nullptr when unavailable).
@@ -186,13 +168,11 @@ PosixEnv::new_random_access_file_reader(const std::string &filename,
         }
     }
 
-    *result = new PosixRandomAccessFileReader(filename, fd, &fd_limiter_, ring,
-                                              direct_io_);
+    *result = new PosixRandomAccessFileReader(filename, fd, &fd_limiter_, ring, direct_io_);
     return Status::ok();
 }
 
-Status PosixEnv::new_writable_file_writer(const std::string &filename,
-                                          WritableFileWriter **result,
+Status PosixEnv::new_writable_file_writer(const std::string &filename, WritableFileWriter **result,
                                           size_t buffer_size) {
     // Calling thread's io_uring ring (nullptr when unavailable).
     struct io_uring *ring = get_thread_local_ring();
@@ -210,8 +190,7 @@ Status PosixEnv::new_writable_file_writer(const std::string &filename,
     return Status::ok();
 }
 
-Status PosixEnv::new_appendable_file_writer(const std::string &filename,
-                                            WritableFileWriter **result,
+Status PosixEnv::new_appendable_file_writer(const std::string &filename, WritableFileWriter **result,
                                             size_t buffer_size) {
     // Calling thread's io_uring ring (nullptr when unavailable).
     struct io_uring *ring = get_thread_local_ring();
@@ -241,40 +220,30 @@ Status PosixEnv::new_appendable_file_writer(const std::string &filename,
         return s;
     }
 
-    *result = new PosixWritableFileWriter(filename, fd, ring, &buf, direct_io_,
-                                          file_size);
+    *result = new PosixWritableFileWriter(filename, fd, ring, &buf, direct_io_, file_size);
 
     return Status::ok();
 }
 
-bool PosixEnv::file_exists(const std::string &filename) {
-    return ::access(filename.c_str(), F_OK) == 0;
-}
+bool PosixEnv::file_exists(const std::string &filename) { return ::access(filename.c_str(), F_OK) == 0; }
 
-Status PosixEnv::get_children(const std::string &dir_path,
-                              std::vector<std::string> *result) {
+Status PosixEnv::get_children(const std::string &dir_path, std::vector<std::string> *result) {
     result->clear();
     ::DIR *dir = ::opendir(dir_path.c_str());
     if (dir == nullptr) { return posix_error(dir_path, errno); }
     struct ::dirent *entry;
-    while ((entry = ::readdir(dir)) != nullptr) {
-        result->emplace_back(entry->d_name);
-    }
+    while ((entry = ::readdir(dir)) != nullptr) { result->emplace_back(entry->d_name); }
     ::closedir(dir);
     return Status::ok();
 }
 
 Status PosixEnv::remove_file(const std::string &filename) {
-    if (::unlink(filename.c_str()) != 0) {
-        return posix_error(filename, errno);
-    }
+    if (::unlink(filename.c_str()) != 0) { return posix_error(filename, errno); }
     return Status::ok();
 }
 
 Status PosixEnv::create_dir(const std::string &dir_name) {
-    if (::mkdir(dir_name.c_str(), 0755) != 0) {
-        return posix_error(dir_name, errno);
-    }
+    if (::mkdir(dir_name.c_str(), 0755) != 0) { return posix_error(dir_name, errno); }
     return Status::ok();
 }
 
@@ -294,9 +263,7 @@ Status PosixEnv::get_file_size(const std::string &filename, uint64_t *size) {
 }
 
 Status PosixEnv::rename_file(const std::string &from, const std::string &to) {
-    if (::rename(from.c_str(), to.c_str()) != 0) {
-        return posix_error(from, errno);
-    }
+    if (::rename(from.c_str(), to.c_str()) != 0) { return posix_error(from, errno); }
     return Status::ok();
 }
 
@@ -346,8 +313,7 @@ Status PosixEnv::get_test_dir(std::string *result) {
         *result = env;
     } else {
         char buf[100];
-        std::snprintf(buf, sizeof(buf), "/tmp/anchordbtest-%d",
-                      static_cast<int>(::geteuid()));
+        std::snprintf(buf, sizeof(buf), "/tmp/anchordbtest-%d", static_cast<int>(::geteuid()));
         *result = buf;
     }
 
@@ -359,8 +325,7 @@ Status PosixEnv::get_test_dir(std::string *result) {
 }
 
 Status PosixEnv::new_logger(const std::string &filename, Logger **result) {
-    int fd = ::open(filename.c_str(),
-                    O_APPEND | O_WRONLY | O_CREAT | kOpenBaseFlags, 0644);
+    int fd = ::open(filename.c_str(), O_APPEND | O_WRONLY | O_CREAT | kOpenBaseFlags, 0644);
     if (fd < 0) {
         *result = nullptr;
         return posix_error(filename, errno);
@@ -383,8 +348,6 @@ uint64_t PosixEnv::now_micros() {
     return static_cast<uint64_t>(tv.tv_sec) * 1000000 + tv.tv_usec;
 }
 
-void PosixEnv::sleep_for_micros(int micros) {
-    std::this_thread::sleep_for(std::chrono::microseconds(micros));
-}
+void PosixEnv::sleep_for_micros(int micros) { std::this_thread::sleep_for(std::chrono::microseconds(micros)); }
 
 } // namespace ANCHORDB_NAMESPACE

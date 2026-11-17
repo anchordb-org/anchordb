@@ -43,13 +43,11 @@ struct ANCHORDB_EXPORT Filter {
 
     // Builds a filter over the `n` keys in `keys`, appending the serialized
     // filter to `*dst`.
-    void (*create_filter)(const void *state, const std::string_view *keys,
-                          size_t n, std::string *dst) = nullptr;
+    void (*create_filter)(const void *state, const std::string_view *keys, size_t n, std::string *dst) = nullptr;
 
     // Returns true if `key` may be in the set the filter was built from, or
     // false if it is definitely absent.
-    bool (*key_may_match)(const void *state, std::string_view key,
-                          std::string_view filter) = nullptr;
+    bool (*key_may_match)(const void *state, std::string_view key, std::string_view filter) = nullptr;
 
     // Optional; frees the configuration `state` when it was heap-allocated.
     void (*destroy)(const void *state) = nullptr;

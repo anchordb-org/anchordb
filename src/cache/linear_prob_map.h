@@ -64,17 +64,11 @@ template <typename T> class LinearProbingMap {
     size_t capacity_;
     size_t size_;
 
-    size_t mask_(uint64_t hash) const {
-        return static_cast<size_t>(hash & (capacity_ - 1));
-    }
+    size_t mask_(uint64_t hash) const { return static_cast<size_t>(hash & (capacity_ - 1)); }
 
-    size_t next_index_(size_t current_idx) const {
-        return (current_idx + 1) & (capacity_ - 1);
-    }
+    size_t next_index_(size_t current_idx) const { return (current_idx + 1) & (capacity_ - 1); }
 
-    static size_t round_upto_power_of_two_(size_t val) {
-        return std::bit_ceil(val);
-    }
+    static size_t round_upto_power_of_two_(size_t val) { return std::bit_ceil(val); }
 
     // Shifts back elements that collided behind the deleted slot
     void shift_back_(size_t delete_idx);
@@ -88,10 +82,7 @@ template <typename T> bool LinearProbingMap<T>::contains(HashedKey key) const {
     size_t idx = mask_(key.hash);
 
     while (buckets_[idx].occupied) {
-        if (buckets_[idx].hashed_key.hash == key.hash &&
-            buckets_[idx].hashed_key.key == key.key) {
-            return true;
-        }
+        if (buckets_[idx].hashed_key.hash == key.hash && buckets_[idx].hashed_key.key == key.key) { return true; }
         idx = next_index_(idx);
     }
 
@@ -104,8 +95,7 @@ template <typename T> T LinearProbingMap<T>::get(HashedKey key) const {
     size_t idx = mask_(key.hash);
 
     while (buckets_[idx].occupied) {
-        if (buckets_[idx].hashed_key.hash == key.hash &&
-            buckets_[idx].hashed_key.key == key.key) {
+        if (buckets_[idx].hashed_key.hash == key.hash && buckets_[idx].hashed_key.key == key.key) {
             return buckets_[idx].value;
         }
         idx = next_index_(idx);
@@ -121,8 +111,7 @@ template <typename T> void LinearProbingMap<T>::insert(HashedKey key, T value) {
 
     while (buckets_[idx].occupied) {
         // Overwrite existing key
-        if (buckets_[idx].hashed_key.hash == key.hash &&
-            buckets_[idx].hashed_key.key == key.key) {
+        if (buckets_[idx].hashed_key.hash == key.hash && buckets_[idx].hashed_key.key == key.key) {
             buckets_[idx].value = value;
             return;
         }
@@ -142,8 +131,7 @@ template <typename T> T LinearProbingMap<T>::remove(HashedKey key) {
     T result;
 
     while (buckets_[idx].occupied) {
-        if (buckets_[idx].hashed_key.hash == key.hash &&
-            buckets_[idx].hashed_key.key == key.key) {
+        if (buckets_[idx].hashed_key.hash == key.hash && buckets_[idx].hashed_key.key == key.key) {
             result = buckets_[idx].value;
             shift_back_(idx);
             size_--;

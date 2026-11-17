@@ -62,8 +62,7 @@ class ANCHORDB_EXPORT Cache {
     // invoked with the key and value when the entry is finally evicted, erased
     // or destroyed; it is responsible for freeing `value`.
     virtual Handle *insert(std::string_view key, void *value, size_t charge,
-                           void (*deleter)(std::string_view key,
-                                           void *value)) = 0;
+                           void (*deleter)(std::string_view key, void *value)) = 0;
 
     // Returns a handle for the cached mapping of `key`, or nullptr on a miss.
     // The caller must release() the returned handle when it is no longer

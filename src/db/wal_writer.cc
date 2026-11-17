@@ -83,8 +83,7 @@ Status WALWriter::append(std::string_view record) {
 
     // Small enough to fit in a single frame.
     if (record.size() <= max_frame_payload_) {
-        return append_frame_(kWALFlagFirstFragment | kWALFlagLastFragment,
-                             record);
+        return append_frame_(kWALFlagFirstFragment | kWALFlagLastFragment, record);
     }
 
     // Split a large logical record into first / middle* / last fragments.

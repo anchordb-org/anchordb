@@ -61,8 +61,7 @@ struct BlobHandle {
 
 // On-memory encoding of a BlobHandle:
 //   | file_id (4B) | size (4B) | offset (8B) |
-inline constexpr size_t kBlobHandleEncodedSize =
-    sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint64_t);
+inline constexpr size_t kBlobHandleEncodedSize = sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint64_t);
 
 // Appends the fixed-width encoding of `handle` to *dst.
 void append_blob_handle(std::string *dst, const BlobHandle &handle);
@@ -81,8 +80,7 @@ struct ParsedInternalKey {
     EntryType type;
 
     ParsedInternalKey() {}
-    ParsedInternalKey(const std::string_view u, const seq_num seq, EntryType t)
-        : user_key(u), sequence(seq), type(t) {}
+    ParsedInternalKey(const std::string_view u, const seq_num seq, EntryType t) : user_key(u), sequence(seq), type(t) {}
 };
 
 namespace {
@@ -90,28 +88,23 @@ namespace {
 // Layout: | sequence (56 bits) | type (8 bits) |
 uint64_t pack_seq_and_type(uint64_t seq, EntryType t) {
     assert(seq <= k_max_seq_num);
-    assert(t == EntryType::Tombstone || t == EntryType::Inline ||
-           t == EntryType::Blob);
+    assert(t == EntryType::Tombstone || t == EntryType::Inline || t == EntryType::Blob);
     return (seq << 8) | static_cast<uint64_t>(t);
 }
 } // namespace
 
 // Returns the on-disk size of an internal key: user_key.size() + 8.
-inline size_t internal_key_encoding_len(const ParsedInternalKey &key) {
-    return key.user_key.size() + 8;
-}
+inline size_t internal_key_encoding_len(const ParsedInternalKey &key) { return key.user_key.size() + 8; }
 
 // Appends the encoded internal key (user_key + 8-byte trailer) to *result.
-inline void append_internal_key(std::string *result,
-                                const ParsedInternalKey &key) {
+inline void append_internal_key(std::string *result, const ParsedInternalKey &key) {
     result->append(key.user_key.data(), key.user_key.size());
     put_fixed_64(result, pack_seq_and_type(key.sequence, key.type));
 }
 
 // Decodes an internal key from a std::string_view.  Returns false if the
 // std::string_view is too short or the EntryType byte is invalid.
-bool parse_internal_key(std::string_view internal_key,
-                        ParsedInternalKey *result);
+bool parse_internal_key(std::string_view internal_key, ParsedInternalKey *result);
 
 // Strips the trailing 8 bytes (seq+type) and returns only the user_key portion.
 inline std::string_view extract_user_key(std::string_view internal_key) {
@@ -145,9 +138,7 @@ class InternalKey {
         return std::string_view(key_);
     }
 
-    std::string_view user_key() const {
-        return extract_user_key(std::string_view(key_));
-    }
+    std::string_view user_key() const { return extract_user_key(std::string_view(key_)); }
 
     void set_from(const ParsedInternalKey &p) {
         key_.clear();
@@ -177,17 +168,11 @@ class LookUpKey {
     }
 
     // Returns the full memtable key including the varint32 length prefix.
-    std::string_view memtable_key() const {
-        return std::string_view(start_, end_ - start_);
-    }
+    std::string_view memtable_key() const { return std::string_view(start_, end_ - start_); }
     // Returns the internal key portion (user_key + 8-byte trailer).
-    std::string_view internal_key() const {
-        return std::string_view(kstart_, end_ - kstart_);
-    }
+    std::string_view internal_key() const { return std::string_view(kstart_, end_ - kstart_); }
     // Returns just the user_key portion.
-    std::string_view user_key() const {
-        return std::string_view(kstart_, end_ - kstart_ - 8);
-    }
+    std::string_view user_key() const { return std::string_view(kstart_, end_ - kstart_ - 8); }
 
   private:
     const char *start_;  // beginning of the memtable key (varint32 prefix)
@@ -206,8 +191,7 @@ class InternalKeyComparator {
     const char *name() const { return "anchordb.InternalKeyComparator"; }
 
     int compare(std::string_view a, std::string_view b) const {
-        int r =
-            user_comparator_->compare(extract_user_key(a), extract_user_key(b));
+        int r = user_comparator_->compare(extract_user_key(a), extract_user_key(b));
         if (r == 0) {
             const uint64_t anum = decode_fixed_64(a.data() + a.size() - 8);
             const uint64_t bnum = decode_fixed_64(b.data() + b.size() - 8);
@@ -222,9 +206,7 @@ class InternalKeyComparator {
 
     const Comparator *user_comparator() const { return user_comparator_; }
 
-    int compare(const InternalKey &a, const InternalKey &b) const {
-        return compare(a.encode(), b.encode());
-    }
+    int compare(const InternalKey &a, const InternalKey &b) const { return compare(a.encode(), b.encode()); }
 
     void find_shortest_separator(std::string *start, std::string_view limit) {
         // Attempt to shorten the user portion of the key
@@ -232,12 +214,10 @@ class InternalKeyComparator {
         std::string_view user_limit = extract_user_key(limit);
         std::string tmp(user_start.data(), user_start.size());
         user_comparator_->find_shortest_separator(&tmp, user_limit);
-        if (tmp.size() < user_start.size() &&
-            user_comparator_->compare(user_start, tmp) < 0) {
+        if (tmp.size() < user_start.size() && user_comparator_->compare(user_start, tmp) < 0) {
             // User key has become shorter physically, but larger logically.
             // Tack on the earliest possible number to the shortened user key.
-            put_fixed_64(&tmp,
-                         pack_seq_and_type(k_max_seq_num, EntryType::Inline));
+            put_fixed_64(&tmp, pack_seq_and_type(k_max_seq_num, EntryType::Inline));
             assert(this->compare(*start, tmp) < 0);
             assert(this->compare(tmp, limit) < 0);
             start->swap(tmp);
@@ -247,12 +227,10 @@ class InternalKeyComparator {
         std::string_view user_key = extract_user_key(*key);
         std::string tmp(user_key.data(), user_key.size());
         user_comparator_->find_short_successor(&tmp);
-        if (tmp.size() < user_key.size() &&
-            user_comparator_->compare(user_key, tmp) < 0) {
+        if (tmp.size() < user_key.size() && user_comparator_->compare(user_key, tmp) < 0) {
             // User key has become shorter physically, but larger logically.
             // Tack on the earliest possible number to the shortened user key.
-            put_fixed_64(&tmp,
-                         pack_seq_and_type(k_max_seq_num, EntryType::Inline));
+            put_fixed_64(&tmp, pack_seq_and_type(k_max_seq_num, EntryType::Inline));
             assert(this->compare(*key, tmp) < 0);
             key->swap(tmp);
         }

@@ -66,7 +66,6 @@ inline constexpr size_t kWALDefaultMaxFramePayload = 1u << 20; // 1 MiB
 //   last          -> the closing fragment of a split record
 inline constexpr uint8_t kWALFlagFirstFragment = 0x01;
 inline constexpr uint8_t kWALFlagLastFragment = 0x02;
-inline constexpr uint8_t kWALKnownFlags =
-    kWALFlagFirstFragment | kWALFlagLastFragment;
+inline constexpr uint8_t kWALKnownFlags = kWALFlagFirstFragment | kWALFlagLastFragment;
 
 } // namespace ANCHORDB_NAMESPACE

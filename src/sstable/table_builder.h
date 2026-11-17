@@ -85,14 +85,12 @@ class TableBuilder {
     // value, which readers ignore).  For Blob, `value` is the memtable's
     // encoded BlobHandle and only the index slot is written: the data file
     // never holds a blob value or a blob handle.
-    Status add(std::string_view key, std::string_view value, EntryType type,
-               uint64_t timestamp);
+    Status add(std::string_view key, std::string_view value, EntryType type, uint64_t timestamp);
 
     // Appends one blob entry from an already-decoded BlobHandle.  The handle's
     // offset and size address the whole vLog record, starting at its header.
     // Only the index entry is written.
-    Status add_blob(std::string_view key, const BlobHandle &handle,
-                    uint64_t timestamp);
+    Status add_blob(std::string_view key, const BlobHandle &handle, uint64_t timestamp);
 
     // Seals the trailing index block, syncs the data and index streams, writes
     // summary.bin and filter.bin, and closes all files.  Idempotent on success.
@@ -140,8 +138,7 @@ class TableBuilder {
 
     // Appends one entry to the index, sealing the current block first when it
     // is full, and records the entry in the filter and summary bookkeeping.
-    Status append_index_(std::string_view key, const ValueHandle &handle,
-                         uint64_t timestamp);
+    Status append_index_(std::string_view key, const ValueHandle &handle, uint64_t timestamp);
 
     // Seals the current (non-empty) block, optionally compresses it, records it
     // in the summary and appends it to index.bin.
@@ -149,8 +146,7 @@ class TableBuilder {
 
     // Writes `contents` to `filename` and syncs it.  Stores the byte count in
     // *size_out on success.
-    Status write_file_(const std::string &filename, std::string_view contents,
-                       uint64_t *size_out);
+    Status write_file_(const std::string &filename, std::string_view contents, uint64_t *size_out);
 
     // Writes filter.bin when a filter is configured; a no-op otherwise.
     Status write_filter_();

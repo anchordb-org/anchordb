@@ -34,8 +34,7 @@ namespace ANCHORDB_NAMESPACE {
 // truncated filter.  The trailing bytes are exactly what Filter::create_filter
 // produced and what Filter::key_may_match expects.
 inline constexpr char kFilterMagic[4] = {'A', 'N', 'D', 'F'};
-inline constexpr size_t kFilterHeaderSize =
-    sizeof(kFilterMagic) + 1 + sizeof(uint32_t); // magic + name_len + count
+inline constexpr size_t kFilterHeaderSize = sizeof(kFilterMagic) + 1 + sizeof(uint32_t); // magic + name_len + count
 
 // Builds the filter file for one SSTable from the table's user keys.
 //

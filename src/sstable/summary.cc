@@ -23,19 +23,14 @@
 namespace ANCHORDB_NAMESPACE {
 
 namespace {
-int ByteWiseCompare(std::string_view a, std::string_view b) {
-    return a.compare(b);
-}
+int ByteWiseCompare(std::string_view a, std::string_view b) { return a.compare(b); }
 
 // Fallback used when the caller supplies no comparator.
-const Comparator kByteWiseComparator{&ByteWiseCompare, nullptr, nullptr,
-                                     nullptr};
+const Comparator kByteWiseComparator{&ByteWiseCompare, nullptr, nullptr, nullptr};
 } // namespace
 
-SummaryBuilder::SummaryBuilder(uint32_t block_size, uint32_t compressor_id,
-                               size_t max_key_size)
-    : block_size_(block_size), compressor_id_(compressor_id),
-      max_key_size_(max_key_size) {
+SummaryBuilder::SummaryBuilder(uint32_t block_size, uint32_t compressor_id, size_t max_key_size)
+    : block_size_(block_size), compressor_id_(compressor_id), max_key_size_(max_key_size) {
     write_header_();
 }
 
@@ -46,8 +41,7 @@ void SummaryBuilder::write_header_() {
     buffer_.append(header_buf, kSummaryHeaderSize);
 }
 
-bool SummaryBuilder::add(std::string_view key, uint64_t block_offset,
-                         uint32_t compressed_size) {
+bool SummaryBuilder::add(std::string_view key, uint64_t block_offset, uint32_t compressed_size) {
     if (key.size() > max_key_size_) { return false; }
 
     char length_buf[kSummaryKeyLenSize];
@@ -68,8 +62,7 @@ bool SummaryBuilder::add(std::string_view key, uint64_t block_offset,
     return true;
 }
 
-SummaryReader::SummaryReader(std::string_view buffer,
-                                       Comparator comparator)
+SummaryReader::SummaryReader(std::string_view buffer, Comparator comparator)
     : comparator_(comparator), block_size_(0), compressor_id_(0), valid_(true) {
     if (comparator_.compare == nullptr) { comparator_ = kByteWiseComparator; }
 
@@ -99,9 +92,8 @@ SummaryReader::SummaryReader(std::string_view buffer,
         const uint32_t key_len = decode_fixed_32(p);
         p += kSummaryKeyLenSize;
 
-        if (static_cast<size_t>(limit - p) < static_cast<size_t>(key_len) +
-                                                 kSummaryOffsetSize +
-                                                 kSummaryCompressedSizeSize) {
+        if (static_cast<size_t>(limit - p) <
+            static_cast<size_t>(key_len) + kSummaryOffsetSize + kSummaryCompressedSizeSize) {
             valid_ = false;
             break;
         }
@@ -120,13 +112,11 @@ SummaryReader::SummaryReader(std::string_view buffer,
     if (!valid_) { entries_.clear(); }
 }
 
-bool SummaryReader::seek(std::string_view target,
-                              uint64_t *block_offset) const {
+bool SummaryReader::seek(std::string_view target, uint64_t *block_offset) const {
     return seek(target, block_offset, nullptr);
 }
 
-bool SummaryReader::seek(std::string_view target, uint64_t *block_offset,
-                              uint32_t *compressed_size) const {
+bool SummaryReader::seek(std::string_view target, uint64_t *block_offset, uint32_t *compressed_size) const {
     if (!valid_ || entries_.empty()) { return false; }
 
     const size_t lo = lower_bound(target);
@@ -137,9 +127,7 @@ bool SummaryReader::seek(std::string_view target, uint64_t *block_offset,
     }
 
     if (block_offset != nullptr) { *block_offset = entries_[lo].block_offset; }
-    if (compressed_size != nullptr) {
-        *compressed_size = entries_[lo].compressed_size;
-    }
+    if (compressed_size != nullptr) { *compressed_size = entries_[lo].compressed_size; }
     return true;
 }
 

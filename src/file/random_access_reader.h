@@ -30,14 +30,12 @@ namespace ANCHORDB_NAMESPACE {
 // otherwise opens the file per read.
 class PosixRandomAccessFileReader final : public RandomAccessFileReader {
   public:
-    PosixRandomAccessFileReader(std::string filename, int fd, Limiter *limiter,
-                                struct io_uring *ring, bool direct_io = true)
-        : filename_(std::move(filename)), has_permanent_fd_(fd >= 0), fd_(fd),
-          limiter_(limiter), ring_(ring), direct_io_(direct_io) {
+    PosixRandomAccessFileReader(std::string filename, int fd, Limiter *limiter, struct io_uring *ring,
+                                bool direct_io = true)
+        : filename_(std::move(filename)), has_permanent_fd_(fd >= 0), fd_(fd), limiter_(limiter), ring_(ring),
+          direct_io_(direct_io) {
         struct stat file_stat;
-        if (fstat(fd_, &file_stat) == 0) {
-            file_size_ = static_cast<size_t>(file_stat.st_size);
-        }
+        if (fstat(fd_, &file_stat) == 0) { file_size_ = static_cast<size_t>(file_stat.st_size); }
     }
 
     ~PosixRandomAccessFileReader() override {
@@ -47,13 +45,11 @@ class PosixRandomAccessFileReader final : public RandomAccessFileReader {
         }
     }
 
-    Status read(uint64_t offset, size_t n, std::string_view *result,
-                char *scratch) override;
+    Status read(uint64_t offset, size_t n, std::string_view *result, char *scratch) override;
     size_t size() override { return file_size_; }
 
   private:
-    Status submit_read_(int fd, void *buf, size_t n, uint64_t offset,
-                        size_t *bytes_read);
+    Status submit_read_(int fd, void *buf, size_t n, uint64_t offset, size_t *bytes_read);
 
     const std::string filename_;
     const bool has_permanent_fd_;

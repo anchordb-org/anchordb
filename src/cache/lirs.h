@@ -49,12 +49,8 @@ class LIRSCache {
         hir_capacity_ = capacity_ - lir_capacity_;
 
         switch (t) {
-        case MapType::LinearProbing:
-            map_.emplace<LinearProbingMap<LIRSHandle *>>(capacity_);
-            break;
-        case MapType::RobbinHood:
-            map_.emplace<RobinHoodMap<LIRSHandle *>>(capacity_);
-            break;
+        case MapType::LinearProbing: map_.emplace<LinearProbingMap<LIRSHandle *>>(capacity_); break;
+        case MapType::RobbinHood: map_.emplace<RobinHoodMap<LIRSHandle *>>(capacity_); break;
         case MapType::Swiss: map_.emplace<SwissMap<LIRSHandle *>>(capacity_);
         }
     }
@@ -103,8 +99,7 @@ class LIRSCache {
         hir_capacity_ = capacity_ - lir_capacity_;
     }
 
-    Cache::Handle *insert(std::string_view key, uint64_t hash, void *value,
-                          size_t charge,
+    Cache::Handle *insert(std::string_view key, uint64_t hash, void *value, size_t charge,
                           void (*deleter)(std::string_view key, void *value));
     Cache::Handle *lookup(std::string_view key, uint64_t hash);
     void release(Cache::Handle *handle);
@@ -135,9 +130,7 @@ class LIRSCache {
     List<LIRSHandle *> stack_;    // LIRS Stack S
     List<LIRSHandle *> hir_list_; // LIRS Queue Q (resident HIR blocks)
 
-    std::variant<LinearProbingMap<LIRSHandle *>, RobinHoodMap<LIRSHandle *>,
-                 SwissMap<LIRSHandle *>>
-        map_;
+    std::variant<LinearProbingMap<LIRSHandle *>, RobinHoodMap<LIRSHandle *>, SwissMap<LIRSHandle *>> map_;
 };
 
 // Shards a LIRS cache across kNumShards independent sub-caches, picking the
@@ -147,16 +140,13 @@ class ShardedLIRSCache : public Cache {
     explicit ShardedLIRSCache(size_t capacity, MapType t) : last_id_(0) {
         shard_.reserve(kNumShards);
         const size_t per_shard = (capacity + (kNumShards - 1)) / kNumShards;
-        for (int s = 0; s < kNumShards; ++s) {
-            shard_.emplace_back(per_shard, t);
-        }
+        for (int s = 0; s < kNumShards; ++s) { shard_.emplace_back(per_shard, t); }
     }
 
     ~ShardedLIRSCache() override {};
 
     Handle *insert(std::string_view key, void *value, size_t charge,
-                   void (*deleter)(std::string_view key,
-                                   void *value)) override {
+                   void (*deleter)(std::string_view key, void *value)) override {
         const uint64_t hash = hash_slice(key);
         return shard_[shard(hash)].insert(key, hash, value, charge, deleter);
     }
@@ -176,9 +166,7 @@ class ShardedLIRSCache : public Cache {
         shard_[shard(hash)].erase(key, hash);
     }
 
-    void *value(Handle *handle) override {
-        return reinterpret_cast<LIRSHandle *>(handle)->value;
-    }
+    void *value(Handle *handle) override { return reinterpret_cast<LIRSHandle *>(handle)->value; }
 
     uint64_t new_id() override {
         id_mutex_.lock();
@@ -193,9 +181,7 @@ class ShardedLIRSCache : public Cache {
 
     size_t total_charge() const override {
         size_t total = 0;
-        for (int s = 0; s < kNumShards; s++) {
-            total += shard_[s].total_charge();
-        }
+        for (int s = 0; s < kNumShards; s++) { total += shard_[s].total_charge(); }
         return total;
     }
 
@@ -205,13 +191,9 @@ class ShardedLIRSCache : public Cache {
     std::mutex id_mutex_;
     uint64_t last_id_;
 
-    static inline uint64_t hash_slice(std::string_view s) {
-        return xx_hash64(s);
-    }
+    static inline uint64_t hash_slice(std::string_view s) { return xx_hash64(s); }
 
-    static uint64_t shard(uint64_t hash) {
-        return hash >> (64 - kNumShardBits);
-    }
+    static uint64_t shard(uint64_t hash) { return hash >> (64 - kNumShardBits); }
 };
 
 } // namespace ANCHORDB_NAMESPACE

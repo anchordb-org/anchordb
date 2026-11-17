@@ -29,8 +29,7 @@
         #else
             #define ANCHORDB_EXPORT __declspec(dllimport)
         #endif
-    #elif defined(__GNUC__) &&                                                 \
-        ((__GNUC__ >= 4) || (__GNUC__ == 3 && __GNUC_MINOR__ >= 3))
+    #elif defined(__GNUC__) && ((__GNUC__ >= 4) || (__GNUC__ == 3 && __GNUC_MINOR__ >= 3))
         #define ANCHORDB_EXPORT __attribute__((visibility("default")))
     #else
         #define ANCHORDB_EXPORT

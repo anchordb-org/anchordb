@@ -54,19 +54,15 @@ bool consume_decimal_number(std::string_view *input, uint64_t *number) {
 
 } // namespace
 
-std::string make_filename(std::string_view dbname, uint64_t number,
-                          std::string_view suffix) {
+std::string make_filename(std::string_view dbname, uint64_t number, std::string_view suffix) {
     char buf[32];
-    const int len = std::snprintf(buf, sizeof(buf), "%06llu",
-                                  static_cast<unsigned long long>(number));
+    const int len = std::snprintf(buf, sizeof(buf), "%06llu", static_cast<unsigned long long>(number));
     std::string name(buf, static_cast<size_t>(len));
     name.append(suffix.data(), suffix.size());
     return join_path(dbname, name);
 }
 
-std::string log_filename(std::string_view dbname, uint64_t number) {
-    return make_filename(dbname, number, ".log");
-}
+std::string log_filename(std::string_view dbname, uint64_t number) { return make_filename(dbname, number, ".log"); }
 
 std::string table_data_filename(std::string_view dbname, uint64_t number) {
     return make_filename(dbname, number, ".data");
@@ -84,43 +80,30 @@ std::string table_filter_filename(std::string_view dbname, uint64_t number) {
     return make_filename(dbname, number, ".filter");
 }
 
-std::string vlog_filename(std::string_view dbname, uint64_t number) {
-    return make_filename(dbname, number, ".vlog");
-}
+std::string vlog_filename(std::string_view dbname, uint64_t number) { return make_filename(dbname, number, ".vlog"); }
 
 std::string descriptor_filename(std::string_view dbname, uint64_t number) {
     char buf[32];
-    const int len = std::snprintf(buf, sizeof(buf), "MANIFEST-%06llu",
-                                  static_cast<unsigned long long>(number));
+    const int len = std::snprintf(buf, sizeof(buf), "MANIFEST-%06llu", static_cast<unsigned long long>(number));
     std::string name(buf, static_cast<size_t>(len));
     return join_path(dbname, name);
 }
 
-std::string temp_filename(std::string_view dbname, uint64_t number) {
-    return make_filename(dbname, number, ".dbtmp");
-}
+std::string temp_filename(std::string_view dbname, uint64_t number) { return make_filename(dbname, number, ".dbtmp"); }
 
-std::string current_filename(std::string_view dbname) {
-    return join_path(dbname, "CURRENT");
-}
+std::string current_filename(std::string_view dbname) { return join_path(dbname, "CURRENT"); }
 
-std::string lock_filename(std::string_view dbname) {
-    return join_path(dbname, "LOCK");
-}
+std::string lock_filename(std::string_view dbname) { return join_path(dbname, "LOCK"); }
 
-std::string infolog_filename(std::string_view dbname) {
-    return join_path(dbname, "LOG");
-}
+std::string infolog_filename(std::string_view dbname) { return join_path(dbname, "LOG"); }
 
 std::string filename(std::string_view dbname, uint64_t number, FileType type) {
     switch (type) {
     case FileType::kLogFile: return log_filename(dbname, number);
     case FileType::kTableDataFile: return table_data_filename(dbname, number);
     case FileType::kTableIndexFile: return table_index_filename(dbname, number);
-    case FileType::kTableSummaryFile:
-        return table_summary_filename(dbname, number);
-    case FileType::kTableFilterFile:
-        return table_filter_filename(dbname, number);
+    case FileType::kTableSummaryFile: return table_summary_filename(dbname, number);
+    case FileType::kTableFilterFile: return table_filter_filename(dbname, number);
     case FileType::kVLogFile: return vlog_filename(dbname, number);
     case FileType::kDescriptorFile: return descriptor_filename(dbname, number);
     case FileType::kTempFile: return temp_filename(dbname, number);
@@ -131,14 +114,11 @@ std::string filename(std::string_view dbname, uint64_t number, FileType type) {
     return std::string();
 }
 
-bool parse_filename(std::string_view filename, uint64_t *number,
-                    FileType *type) {
+bool parse_filename(std::string_view filename, uint64_t *number, FileType *type) {
     if (number == nullptr || type == nullptr) { return false; }
 
     const size_t slash = filename.find_last_of('/');
-    std::string_view rest = (slash == std::string_view::npos)
-                                ? filename
-                                : filename.substr(slash + 1);
+    std::string_view rest = (slash == std::string_view::npos) ? filename : filename.substr(slash + 1);
 
     if (rest == "CURRENT") {
         *number = 0;
@@ -159,9 +139,7 @@ bool parse_filename(std::string_view filename, uint64_t *number,
     if (rest.starts_with("MANIFEST-")) {
         rest.remove_prefix(9);
         uint64_t num = 0;
-        if (!consume_decimal_number(&rest, &num) || !rest.empty()) {
-            return false;
-        }
+        if (!consume_decimal_number(&rest, &num) || !rest.empty()) { return false; }
         *number = num;
         *type = FileType::kDescriptorFile;
         return true;

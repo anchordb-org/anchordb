@@ -40,12 +40,9 @@ template <typename Key, class Cmp> class Skiplist {
     };
 
   public:
-    explicit Skiplist(Cmp cmp, Arena *arena)
-        : arena_(arena), cmp_(cmp), curr_height_{0}, rnd_(0xdeadbeef) {
+    explicit Skiplist(Cmp cmp, Arena *arena) : arena_(arena), cmp_(cmp), curr_height_{0}, rnd_(0xdeadbeef) {
         head_ = new_node_(0, k_max_height_);
-        for (int i = 0; i <= k_max_height_; ++i) {
-            head_->forward_[i].store(nullptr, std::memory_order_relaxed);
-        }
+        for (int i = 0; i <= k_max_height_; ++i) { head_->forward_[i].store(nullptr, std::memory_order_relaxed); }
     }
 
     ~Skiplist() { clear_(); }
@@ -63,9 +60,7 @@ template <typename Key, class Cmp> class Skiplist {
     class Iterator {
       public:
         explicit Iterator(const Skiplist *list)
-            : list_(list),
-              node_(list_->head_->forward_[0].load(std::memory_order_acquire)) {
-        }
+            : list_(list), node_(list_->head_->forward_[0].load(std::memory_order_acquire)) {}
 
         ~Iterator() = default;
 
@@ -87,13 +82,9 @@ template <typename Key, class Cmp> class Skiplist {
             node_ = (p == list_->head_) ? nullptr : p;
         }
 
-        void seek(const Key &target) {
-            node_ = list_->find_greater_or_equal_(target);
-        }
+        void seek(const Key &target) { node_ = list_->find_greater_or_equal_(target); }
 
-        void seek_to_first() {
-            node_ = list_->head_->forward_[0].load(std::memory_order_acquire);
-        }
+        void seek_to_first() { node_ = list_->head_->forward_[0].load(std::memory_order_acquire); }
 
         void seek_to_last() {
             node_ = list_->find_last_();
@@ -127,8 +118,7 @@ template <typename Key, class Cmp> class Skiplist {
     bool equal_(const Key &a, const Key &b) const { return cmp_(a, b) == 0; }
 };
 
-template <typename Key, class Comparator>
-int Skiplist<Key, Comparator>::random_height_() {
+template <typename Key, class Comparator> int Skiplist<Key, Comparator>::random_height_() {
     // Increase height with probability 1 in k_branching
     static const unsigned int k_branching = 4;
     int height = 1;
@@ -138,8 +128,7 @@ int Skiplist<Key, Comparator>::random_height_() {
     return height;
 }
 
-template <typename Key, class Comparator>
-void Skiplist<Key, Comparator>::clear_() {
+template <typename Key, class Comparator> void Skiplist<Key, Comparator>::clear_() {
     if (!head_) return;
     // Destroy nodes; their storage is owned by the arena, not freed here.
     Node *curr = head_->forward_[0].load(std::memory_order_relaxed);
@@ -148,23 +137,19 @@ void Skiplist<Key, Comparator>::clear_() {
         curr->~Node();
         curr = next;
     }
-    for (int i = 0; i <= k_max_height_; ++i) {
-        head_->forward_[i].store(nullptr, std::memory_order_relaxed);
-    }
+    for (int i = 0; i <= k_max_height_; ++i) { head_->forward_[i].store(nullptr, std::memory_order_relaxed); }
     curr_height_.store(0, std::memory_order_relaxed);
 }
 
 template <typename Key, class Comparator>
-typename Skiplist<Key, Comparator>::Node *
-Skiplist<Key, Comparator>::new_node_(const Key &key, int level) {
+typename Skiplist<Key, Comparator>::Node *Skiplist<Key, Comparator>::new_node_(const Key &key, int level) {
     size_t mem_size = sizeof(Node) + sizeof(std::atomic<Node *>) * level;
     char *node_mem = arena_->allocate_aligned(mem_size);
     return new (node_mem) Node(key, level);
 }
 
 template <typename Key, class Comparator>
-typename Skiplist<Key, Comparator>::Node *
-Skiplist<Key, Comparator>::find_greater_or_equal_(const Key &key) const {
+typename Skiplist<Key, Comparator>::Node *Skiplist<Key, Comparator>::find_greater_or_equal_(const Key &key) const {
     Node *curr = head_;
     int max_lvl = curr_height_.load(std::memory_order_acquire);
 
@@ -179,8 +164,7 @@ Skiplist<Key, Comparator>::find_greater_or_equal_(const Key &key) const {
 }
 
 template <typename Key, class Comparator>
-typename Skiplist<Key, Comparator>::Node *
-Skiplist<Key, Comparator>::find_last_() const {
+typename Skiplist<Key, Comparator>::Node *Skiplist<Key, Comparator>::find_last_() const {
     Node *curr = head_;
     int max_lvl = curr_height_.load(std::memory_order_acquire);
 
@@ -194,8 +178,7 @@ Skiplist<Key, Comparator>::find_last_() const {
     return curr;
 }
 
-template <typename Key, class Comparator>
-void Skiplist<Key, Comparator>::insert(const Key &key) {
+template <typename Key, class Comparator> void Skiplist<Key, Comparator>::insert(const Key &key) {
     Node *update[k_max_height_ + 1];
     Node *curr = head_;
     int max_lvl = curr_height_.load(std::memory_order_relaxed);
@@ -226,23 +209,16 @@ void Skiplist<Key, Comparator>::insert(const Key &key) {
     x->prev_.store(update[0], std::memory_order_relaxed);
 
     for (int i = 0; i <= new_level; ++i) {
-        x->forward_[i].store(
-            update[i]->forward_[i].load(std::memory_order_relaxed),
-            std::memory_order_relaxed);
+        x->forward_[i].store(update[i]->forward_[i].load(std::memory_order_relaxed), std::memory_order_relaxed);
     }
 
     // Publish x into each level, then fix the old successor's back pointer.
-    for (int i = 0; i <= new_level; ++i) {
-        update[i]->forward_[i].store(x, std::memory_order_release);
-    }
+    for (int i = 0; i <= new_level; ++i) { update[i]->forward_[i].store(x, std::memory_order_release); }
 
-    if (next_node != nullptr) {
-        next_node->prev_.store(x, std::memory_order_release);
-    }
+    if (next_node != nullptr) { next_node->prev_.store(x, std::memory_order_release); }
 }
 
-template <typename Key, class Comparator>
-bool Skiplist<Key, Comparator>::contains(const Key &key) const {
+template <typename Key, class Comparator> bool Skiplist<Key, Comparator>::contains(const Key &key) const {
     Node *x = find_greater_or_equal_(key);
     return x != nullptr && equal_(key, x->key_);
 }

@@ -61,27 +61,21 @@ class ANCHORDB_EXPORT Env {
 
     // Opens `fname` for sequential reading.  `buffer_size` of 0 selects a
     // sensible default.
-    virtual Status new_sequential_file_reader(const std::string &fname,
-                                              SequentialFileReader **result,
+    virtual Status new_sequential_file_reader(const std::string &fname, SequentialFileReader **result,
                                               size_t buffer_size = 0) = 0;
     // Opens `fname` for random (positional) reading.
-    virtual Status
-    new_random_access_file_reader(const std::string &fname,
-                                  RandomAccessFileReader **result) = 0;
+    virtual Status new_random_access_file_reader(const std::string &fname, RandomAccessFileReader **result) = 0;
     // Creates (or truncates) `fname` for buffered writing.
-    virtual Status new_writable_file_writer(const std::string &fname,
-                                            WritableFileWriter **result,
+    virtual Status new_writable_file_writer(const std::string &fname, WritableFileWriter **result,
                                             size_t buffer_size = 0) = 0;
     // Opens `fname` for appending, preserving any existing contents.
-    virtual Status new_appendable_file_writer(const std::string &fname,
-                                              WritableFileWriter **result,
+    virtual Status new_appendable_file_writer(const std::string &fname, WritableFileWriter **result,
                                               size_t buffer_size = 0) = 0;
 
     // Returns whether `fname` exists.
     virtual bool file_exists(const std::string &fname) = 0;
     // Appends the names of the entries in directory `dir` to `*children`.
-    virtual Status get_children(const std::string &dir,
-                                std::vector<std::string> *children) = 0;
+    virtual Status get_children(const std::string &dir, std::vector<std::string> *children) = 0;
     // Deletes the file `fname`.
     virtual Status remove_file(const std::string &fname) = 0;
     // Creates directory `dirname`.
@@ -91,8 +85,7 @@ class ANCHORDB_EXPORT Env {
     // Stores the size in bytes of `fname` in `*size`.
     virtual Status get_file_size(const std::string &fname, uint64_t *size) = 0;
     // Renames `src` to `target`, replacing `target` if it exists.
-    virtual Status rename_file(const std::string &src,
-                               const std::string &target) = 0;
+    virtual Status rename_file(const std::string &src, const std::string &target) = 0;
 
     // Acquires an exclusive lock on `fname`, storing the lock token in `*lock`.
     // The caller owns the token and releases it with unlock_file().
@@ -148,8 +141,7 @@ class ANCHORDB_EXPORT RandomAccessFileReader {
     // Reads up to `n` bytes at absolute `offset` into `scratch` and points
     // `*result` at them; the view is valid until the next call.  `*result` may
     // be shorter than `n` at end of file.
-    virtual Status read(uint64_t offset, size_t n, std::string_view *result,
-                        char *scratch) = 0;
+    virtual Status read(uint64_t offset, size_t n, std::string_view *result, char *scratch) = 0;
     // Returns the absolute byte count of a file
     virtual size_t size() = 0;
 };
@@ -213,64 +205,34 @@ class ANCHORDB_EXPORT EnvWrapper : public Env {
     Env *target() const { return target_; }
 
     // The rest of the class forwards every Env method to target().
-    Status new_sequential_file_reader(const std::string &f,
-                                      SequentialFileReader **r,
-                                      size_t buffer_size = 0) override {
+    Status new_sequential_file_reader(const std::string &f, SequentialFileReader **r, size_t buffer_size = 0) override {
         return target_->new_sequential_file_reader(f, r, buffer_size);
     }
-    Status new_random_access_file_reader(const std::string &f,
-                                         RandomAccessFileReader **r) override {
+    Status new_random_access_file_reader(const std::string &f, RandomAccessFileReader **r) override {
         return target_->new_random_access_file_reader(f, r);
     }
-    Status new_writable_file_writer(const std::string &f,
-                                    WritableFileWriter **r,
-                                    size_t buffer_size = 0) override {
+    Status new_writable_file_writer(const std::string &f, WritableFileWriter **r, size_t buffer_size = 0) override {
         return target_->new_writable_file_writer(f, r, buffer_size);
     }
-    Status new_appendable_file_writer(const std::string &f,
-                                      WritableFileWriter **r,
-                                      size_t buffer_size = 0) override {
+    Status new_appendable_file_writer(const std::string &f, WritableFileWriter **r, size_t buffer_size = 0) override {
         return target_->new_appendable_file_writer(f, r, buffer_size);
     }
-    bool file_exists(const std::string &f) override {
-        return target_->file_exists(f);
-    }
-    Status get_children(const std::string &dir,
-                        std::vector<std::string> *r) override {
+    bool file_exists(const std::string &f) override { return target_->file_exists(f); }
+    Status get_children(const std::string &dir, std::vector<std::string> *r) override {
         return target_->get_children(dir, r);
     }
-    Status remove_file(const std::string &f) override {
-        return target_->remove_file(f);
-    }
-    Status create_dir(const std::string &d) override {
-        return target_->create_dir(d);
-    }
-    Status remove_dir(const std::string &d) override {
-        return target_->remove_dir(d);
-    }
-    Status get_file_size(const std::string &f, uint64_t *s) override {
-        return target_->get_file_size(f, s);
-    }
-    Status rename_file(const std::string &s, const std::string &t) override {
-        return target_->rename_file(s, t);
-    }
-    Status lock_file(const std::string &f, FileLock **l) override {
-        return target_->lock_file(f, l);
-    }
+    Status remove_file(const std::string &f) override { return target_->remove_file(f); }
+    Status create_dir(const std::string &d) override { return target_->create_dir(d); }
+    Status remove_dir(const std::string &d) override { return target_->remove_dir(d); }
+    Status get_file_size(const std::string &f, uint64_t *s) override { return target_->get_file_size(f, s); }
+    Status rename_file(const std::string &s, const std::string &t) override { return target_->rename_file(s, t); }
+    Status lock_file(const std::string &f, FileLock **l) override { return target_->lock_file(f, l); }
     Status unlock_file(FileLock *l) override { return target_->unlock_file(l); }
-    void schedule(void (*f)(void *), void *a) override {
-        return target_->schedule(f, a);
-    }
-    Status get_test_dir(std::string *path) override {
-        return target_->get_test_dir(path);
-    }
-    Status new_logger(const std::string &fname, Logger **result) override {
-        return target_->new_logger(fname, result);
-    }
+    void schedule(void (*f)(void *), void *a) override { return target_->schedule(f, a); }
+    Status get_test_dir(std::string *path) override { return target_->get_test_dir(path); }
+    Status new_logger(const std::string &fname, Logger **result) override { return target_->new_logger(fname, result); }
     uint64_t now_micros() override { return target_->now_micros(); }
-    void sleep_for_micros(int micros) override {
-        target_->sleep_for_micros(micros);
-    }
+    void sleep_for_micros(int micros) override { target_->sleep_for_micros(micros); }
 
   private:
     Env *target_;

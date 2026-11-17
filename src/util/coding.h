@@ -66,17 +66,13 @@ int varint_len(uint64_t v);
 // These read a varint from [p, limit), returning a pointer to the byte after
 // the varint on success, or nullptr if the varint is truncated.
 
-const char *get_varint_32_ptr_fallback(const char *p, const char *limit,
-                                       uint32_t *value);
-const char *get_varint_64_ptr_fallback(const char *p, const char *limit,
-                                       uint64_t *value);
+const char *get_varint_32_ptr_fallback(const char *p, const char *limit, uint32_t *value);
+const char *get_varint_64_ptr_fallback(const char *p, const char *limit, uint64_t *value);
 
 // Fast-path: if the first byte has MSB clear, the varint is a single byte.
 // Otherwise falls back to the general (slower) decoder.
-const char *get_varint_32_ptr(const char *p, const char *limit,
-                              uint32_t *value);
-const char *get_varint_64_ptr(const char *p, const char *limit,
-                              uint64_t *value);
+const char *get_varint_32_ptr(const char *p, const char *limit, uint32_t *value);
+const char *get_varint_64_ptr(const char *p, const char *limit, uint64_t *value);
 
 // Decodes a varint from the front of *input, advancing the std::string_view
 // past the consumed bytes.  Returns false if the varint is truncated.

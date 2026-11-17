@@ -24,26 +24,20 @@
 namespace ANCHORDB_NAMESPACE {
 
 namespace {
-int byte_wise_compare(std::string_view a, std::string_view b) {
-    return a.compare(b);
-}
+int byte_wise_compare(std::string_view a, std::string_view b) { return a.compare(b); }
 
 const char *byte_wise_name() { return "anchordb.ByteWiseComparator"; }
 
-void byte_wise_find_shortest_separator(std::string *start,
-                                       std::string_view limit) {
+void byte_wise_find_shortest_separator(std::string *start, std::string_view limit) {
     size_t min_len = std::min(start->size(), limit.size());
     size_t diff_index = 0;
-    while (diff_index < min_len && (*start)[diff_index] == limit[diff_index]) {
-        diff_index++;
-    }
+    while (diff_index < min_len && (*start)[diff_index] == limit[diff_index]) { diff_index++; }
 
     if (diff_index >= min_len) {
         // Do not shorten if one string is a prefix of the other
     } else {
         uint8_t diff_byte = static_cast<uint8_t>((*start)[diff_index]);
-        if (diff_byte < static_cast<uint8_t>(0xff) &&
-            diff_byte + 1 < static_cast<uint8_t>(limit[diff_index])) {
+        if (diff_byte < static_cast<uint8_t>(0xff) && diff_byte + 1 < static_cast<uint8_t>(limit[diff_index])) {
             (*start)[diff_index]++;
             start->resize(diff_index + 1);
             assert(byte_wise_compare(*start, limit) < 0);
@@ -66,8 +60,7 @@ void byte_wise_find_short_successor(std::string *key) {
 } // namespace
 
 const Comparator new_byte_wise_comparator() {
-    return Comparator{&byte_wise_compare, &byte_wise_name,
-                      &byte_wise_find_shortest_separator,
+    return Comparator{&byte_wise_compare, &byte_wise_name, &byte_wise_find_shortest_separator,
                       &byte_wise_find_short_successor};
 }
 

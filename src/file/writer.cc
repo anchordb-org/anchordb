@@ -12,25 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "writer.h"
 #include "anchordb/anchordb_namespace.h"
 #include "io_uring_config.h"
 #include "sync_io.h"
+#include "writer.h"
 #include <fcntl.h>
 #include <unistd.h>
 
 namespace ANCHORDB_NAMESPACE {
-Status PosixWritableFileWriter::submit_write_(const char *src, size_t len,
-                                              uint64_t offset) {
+Status PosixWritableFileWriter::submit_write_(const char *src, size_t len, uint64_t offset) {
     // io_uring unavailable: use pwrite(2) at the explicit offset so the
     // writer never depends on a shared file position.
-    if (ring_ == nullptr) {
-        return file_internal::sync_pwrite(filename_, fd_, src, len, offset);
-    }
+    if (ring_ == nullptr) { return file_internal::sync_pwrite(filename_, fd_, src, len, offset); }
 
 #if !HAS_IO_URING
-    return Status::not_supported(
-        std::string_view("io_uring support not compiled in"));
+    return Status::not_supported(std::string_view("io_uring support not compiled in"));
 #else
     size_t total_written = 0;
     while (total_written < len) {
@@ -68,8 +64,7 @@ Status PosixWritableFileWriter::submit_write_(const char *src, size_t len,
 
         total_written += static_cast<size_t>(res);
 
-        if (direct_io_ && (res % kDirectIOAlignment != 0) &&
-            (total_written < len)) {
+        if (direct_io_ && (res % kDirectIOAlignment != 0) && (total_written < len)) {
             return posix_error(filename_, EINVAL);
         }
     }
@@ -84,8 +79,7 @@ Status PosixWritableFileWriter::append(std::string_view data) {
 
     while (left > 0) {
         if (direct_io_ && buf_.current_size() == 0) {
-            bool is_src_aligned =
-                (reinterpret_cast<uintptr_t>(src) % kDirectIOAlignment == 0);
+            bool is_src_aligned = (reinterpret_cast<uintptr_t>(src) % kDirectIOAlignment == 0);
             bool is_offset_aligned = (filesize_ % kDirectIOAlignment == 0);
             bool is_len_aligned = (left % kDirectIOAlignment == 0);
 
@@ -116,9 +110,7 @@ Status PosixWritableFileWriter::close() {
     Status s = flush_buffer();
 
     if (direct_io_ && s.is_ok() && fd_ >= 0) {
-        if (::ftruncate(fd_, filesize_) < 0) {
-            s = posix_error(filename_, errno);
-        }
+        if (::ftruncate(fd_, filesize_) < 0) { s = posix_error(filename_, errno); }
     }
 
     if (fd_ >= 0) {
@@ -166,28 +158,21 @@ Status PosixWritableFileWriter::flush_buffer() {
     AlignedBuffer lead_block;
 
     if ((buf_offset_ % kDirectIOAlignment) != 0) {
-        const uint64_t aligned_start =
-            buf_offset_ & ~(static_cast<uint64_t>(kDirectIOAlignment) - 1);
+        const uint64_t aligned_start = buf_offset_ & ~(static_cast<uint64_t>(kDirectIOAlignment) - 1);
         const size_t leading = static_cast<size_t>(buf_offset_ - aligned_start);
-        const size_t total =
-            round_up(leading + logical_bytes, kDirectIOAlignment);
+        const size_t total = round_up(leading + logical_bytes, kDirectIOAlignment);
 
         lead_block = AlignedBuffer(total, kDirectIOAlignment);
         if (!lead_block.is_allocated()) {
-            return Status::io_error(std::string_view(
-                "Failed to allocate aligned buffer for O_DIRECT write"));
+            return Status::io_error(std::string_view("Failed to allocate aligned buffer for O_DIRECT write"));
         }
 
         size_t got = 0;
-        Status s = file_internal::sync_pread(filename_, fd_, lead_block.data(),
-                                             total, aligned_start, &got);
+        Status s = file_internal::sync_pread(filename_, fd_, lead_block.data(), total, aligned_start, &got);
         if (!s.is_ok()) return s;
-        if (got < total) {
-            std::memset(lead_block.data() + got, 0, total - got);
-        }
+        if (got < total) { std::memset(lead_block.data() + got, 0, total - got); }
         std::memcpy(lead_block.data() + leading, buf_.data(), logical_bytes);
-        std::memset(lead_block.data() + leading + logical_bytes, 0,
-                    total - leading - logical_bytes);
+        std::memset(lead_block.data() + leading + logical_bytes, 0, total - leading - logical_bytes);
 
         s = submit_write_(lead_block.data(), total, aligned_start);
         if (!s.is_ok()) return s;
@@ -206,9 +191,7 @@ Status PosixWritableFileWriter::flush_buffer() {
     // on-disk size always equals the logical size, keeping a reopen (and a
     // crash after sync) from mistaking padding for data.
     if (write_offset + write_len > filesize_) {
-        if (::ftruncate(fd_, static_cast<off_t>(filesize_)) < 0) {
-            return posix_error(filename_, errno);
-        }
+        if (::ftruncate(fd_, static_cast<off_t>(filesize_)) < 0) { return posix_error(filename_, errno); }
     }
 
     // Retain the sub-block tail that belongs to the last (padded) block so the
@@ -256,15 +239,11 @@ std::string PosixWritableFileWriter::dirname(const std::string &filename) {
     return filename.substr(0, separator_pos);
 }
 
-std::string_view
-PosixWritableFileWriter::basename(const std::string &filename) {
+std::string_view PosixWritableFileWriter::basename(const std::string &filename) {
     std::string::size_type separator_pos = filename.rfind('/');
-    if (separator_pos == std::string::npos) {
-        return std::string_view(filename);
-    }
+    if (separator_pos == std::string::npos) { return std::string_view(filename); }
     assert(filename.find('/', separator_pos + 1) == std::string::npos);
 
-    return std::string_view(filename.data() + separator_pos + 1,
-                            filename.length() - separator_pos - 1);
+    return std::string_view(filename.data() + separator_pos + 1, filename.length() - separator_pos - 1);
 }
 } // namespace ANCHORDB_NAMESPACE

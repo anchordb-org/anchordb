@@ -12,14 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "anchordb/env.h"
 #include "data_record.h"
+#include "anchordb/env.h"
 #include "sstable/data_record.h"
 #include "util/coding.h"
 #include "util/crc32.h"
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <string_view>
 

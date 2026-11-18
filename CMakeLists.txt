@@ -44,6 +44,10 @@ target_sources(anchordb
         src/memory/arena.h
         src/memory/arena.cc
         src/memtable/skiplist.h
+        src/memtable/entry.h
+        src/memtable/entry.cc
+        src/memtable/vlog_reader_cache.h
+        src/memtable/vlog_reader_cache.cc
         src/memtable/table.h
         src/memtable/table.cc
         src/util/coding.h
@@ -71,7 +75,6 @@ target_sources(anchordb
         src/util/filter/ribbon_filter.cc
         src/util/filter/filter.cc
         src/db/db_format.h
-        src/db/db_format.cc
         src/db/iterator.cc
         src/db/wal_format.h
         src/db/wal_reader.h

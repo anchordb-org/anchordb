@@ -79,14 +79,4 @@ const char *get_varint_64_ptr(const char *p, const char *limit, uint64_t *value)
 bool get_varint_32(std::string_view *input, uint32_t *value);
 bool get_varint_64(std::string_view *input, uint64_t *value);
 
-// Length-prefixed slice encoding
-// Encodes a std::string_view as: | varint32(size) | raw bytes |.
-// This is the standard way to embed variable-length data in a binary record.
-
-// Appends a length-prefixed slice to *dst.
-void put_len_prefixed_slice(std::string *dst, std::string_view value);
-// Reads a length-prefixed slice from the front of *input, advancing past it.
-// Returns false if the input is truncated.
-bool get_len_prefixed_slice(std::string_view *input, std::string_view *result);
-
 } // namespace ANCHORDB_NAMESPACE

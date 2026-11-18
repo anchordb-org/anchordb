@@ -14,11 +14,13 @@
 
 #pragma once
 
+#include "anchordb/comparator.h"
 #include "anchordb/iterator.h"
 #include "anchordb/status.h"
-#include "db/db_format.h"
 #include "memory/arena.h"
+#include "memtable/entry.h"
 #include "memtable/skiplist.h"
+#include "memtable/vlog_reader_cache.h"
 #include <atomic>
 #include <cassert>
 #include <cstddef>
@@ -35,64 +37,48 @@ class Env;
 class MemTable;
 class DataRecordWriter;
 
-// Decodes a length-prefixed slice: varint32 length followed by the payload.
-inline std::string_view get_len_prefixed_slice(const char *data) {
-    uint32_t len;
-    const char *p = data;
-    p = get_varint_32_ptr(p, p + 5, &len);
-    return std::string_view(p, len);
-}
-
-// Encodes `target` into `scratch` as a length-prefixed internal key.  Iterator
-// seeks use the highest sequence number and the largest EntryType, so the
-// encoded key sorts before every stored version of `target`.
-inline char *encode_key(std::string *scratch, std::string_view target) {
-    scratch->clear();
-    put_varint_32(scratch, target.size() + 8);
-    scratch->append(target.data(), target.size());
-    put_fixed_64(scratch, pack_seq_and_type(k_max_seq_num, EntryType::Blob));
-    return scratch->data();
-}
-
-// Orders length-prefixed internal keys the same way InternalKeyComparator does:
-// user key ascending, then the packed (sequence, type) trailer descending.
-// The value bytes that follow the trailer are not part of the comparison.
+// Orders memtable entries by user key ascending (via the user comparator), then
+// timestamp descending (newest first), then EntryType descending.  The value
+// bytes that follow the key portion are not part of the comparison.
 struct KeyComparator {
     const Comparator comparator;
     explicit KeyComparator(const Comparator &c) : comparator(c) {}
     int operator()(const char *aptr, const char *bptr) const {
-        std::string_view a = get_len_prefixed_slice(aptr);
-        std::string_view b = get_len_prefixed_slice(bptr);
-        const std::string_view a_user(a.data(), a.size() - 8);
-        const std::string_view b_user(b.data(), b.size() - 8);
-        int r = comparator.compare(a_user, b_user);
+        MemtableEntry a;
+        MemtableEntry b;
+        MemtableEntry::decode_key(aptr, &a);
+        MemtableEntry::decode_key(bptr, &b);
+
+        int r = comparator.compare(a.key(), b.key());
         if (r != 0) { return r; }
-        const uint64_t a_tag = decode_fixed_64(a.data() + a.size() - 8);
-        const uint64_t b_tag = decode_fixed_64(b.data() + b.size() - 8);
-        if (a_tag > b_tag) { return -1; }
-        if (a_tag < b_tag) { return 1; }
+        if (a.timestamp() > b.timestamp()) { return -1; }
+        if (a.timestamp() < b.timestamp()) { return 1; }
+        const uint8_t at = static_cast<uint8_t>(a.type());
+        const uint8_t bt = static_cast<uint8_t>(b.type());
+        if (at > bt) { return -1; }
+        if (at < bt) { return 1; }
         return 0;
     }
 };
 
 using Table = Skiplist<const char *, KeyComparator>;
 
-// Iterator over a memtable's skiplist, decoding length-prefixed keys/values.
-// Blob values are resolved from the vLog on demand; the returned view points
-// into the iterator's scratch buffer.
+// Iterator over a memtable's skiplist.  key() returns the user key; a memtable
+// can hold several versions of one user key, ordered newest first.  Blob values
+// are resolved from the vLog on demand; the returned view points into the
+// iterator's scratch buffer.
 class MemtableIterator : public Iterator {
   public:
     MemtableIterator(Table *table, const MemTable *memtable) : memtable_(memtable), iter_(table) {}
 
     MemtableIterator(MemtableIterator &&other) noexcept
-        : memtable_(other.memtable_), iter_(std::move(other.iter_)), tmp_(std::move(other.tmp_)),
-          value_scratch_(std::move(other.value_scratch_)), status_(std::move(other.status_)) {}
+        : memtable_(other.memtable_), iter_(std::move(other.iter_)), value_scratch_(std::move(other.value_scratch_)),
+          status_(std::move(other.status_)) {}
 
     MemtableIterator &operator=(MemtableIterator &&other) {
         if (this != &other) {
             this->memtable_ = other.memtable_;
             this->iter_ = std::move(other.iter_);
-            this->tmp_ = std::move(other.tmp_);
             this->value_scratch_ = std::move(other.value_scratch_);
             this->status_ = std::move(other.status_);
         }
@@ -104,17 +90,19 @@ class MemtableIterator : public Iterator {
     bool valid() const override { return iter_.valid(); }
     void next() override { iter_.next(); }
     void prev() override { iter_.prev(); }
-    void seek(std::string_view key) override { iter_.seek(encode_key(&tmp_, key)); }
+    void seek(std::string_view key) override {
+        LookUpKey lookup(key, UINT64_MAX, EntryType::Blob);
+        iter_.seek(lookup.memtable_key().data());
+    }
     void seek_to_first() override { iter_.seek_to_first(); }
     void seek_to_last() override { iter_.seek_to_last(); }
-    std::string_view key() const override { return get_len_prefixed_slice(iter_.key()); }
+    std::string_view key() const override { return MemtableEntry::key_view(iter_.key()); }
     std::string_view value() const override;
     Status status() const override { return status_; }
 
   private:
     const MemTable *memtable_;
     typename Table::Iterator iter_;
-    std::string tmp_;                   // scratch buffer for seek key encoding
     mutable std::string value_scratch_; // resolved blob value
     mutable Status status_;
 };
@@ -133,7 +121,7 @@ class MemTable {
                       size_t value_threshold = 4 * 1024, Env *env = nullptr, std::string vlog_dbname = std::string())
         : comparator_(std::move(comparator)), arena_(arena_block_size), refs_{0}, max_key_size_(max_key_size),
           value_threshold_(value_threshold), vlog_writer_(vlog_writer), vlog_file_id_(vlog_file_id), env_(env),
-          vlog_dbname_(std::move(vlog_dbname)), table_(KeyComparator(comparator_), &arena_) {}
+          vlog_dbname_(std::move(vlog_dbname)), vlog_reader_cache_(env), table_(KeyComparator(comparator_), &arena_) {}
 
     MemTable(const MemTable &) = delete;
     MemTable &operator=(const MemTable &) = delete;
@@ -151,9 +139,10 @@ class MemTable {
 
     Iterator *new_iterator() { return new MemtableIterator(&table_, this); }
 
-    // Inserts one entry.  Returns Status::invalid_argument when `key` exceeds
-    // max_key_size().  Not thread-safe: writers must be serialized.
-    Status add(seq_num seq, EntryType type, std::string_view key, std::string_view value);
+    // Inserts one entry stamped with `timestamp`.  Returns
+    // Status::invalid_argument when `key` exceeds max_key_size() or `type` is
+    // not a valid EntryType.  Not thread-safe: writers must be serialized.
+    Status add(uint64_t timestamp, EntryType type, std::string_view key, std::string_view value);
 
     // Maximum accepted key length in bytes.
     size_t max_key_size() const { return max_key_size_; }
@@ -181,6 +170,10 @@ class MemTable {
     uint32_t vlog_file_id_;
     Env *env_;
     std::string vlog_dbname_;
+    // Open vLog readers, keyed by file name.  Kept per memtable; the underlying
+    // Cache handles eviction and deletion.  Mutable because blob reads go
+    // through a const memtable view.
+    mutable VLogReaderCache vlog_reader_cache_;
     Table table_;
 };
 

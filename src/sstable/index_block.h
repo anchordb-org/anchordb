@@ -15,6 +15,7 @@
 #pragma once
 
 #include "anchordb/anchordb_namespace.h"
+#include "anchordb/comparator.h"
 #include "anchordb/iterator.h"
 #include "db/db_format.h"
 #include "file/file_meta.h"

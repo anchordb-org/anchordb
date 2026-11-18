@@ -272,12 +272,6 @@ void put_varint_64(std::string *dst, uint64_t value) {
     dst->append(buf, ptr - buf);
 }
 
-// Encodes a std::string_view as: | varint32(size) | raw bytes |.
-void put_len_prefixed_slice(std::string *dst, std::string_view value) {
-    put_varint_32(dst, value.size());
-    dst->append(value.data(), value.size());
-}
-
 // Returns the number of bytes required to encode v as a varint.
 int varint_len(uint64_t v) {
     int len = 1;
@@ -419,20 +413,6 @@ bool get_varint_64(std::string_view *input, uint64_t *value) {
     if (ptr == nullptr) { return false; }
     *input = std::string_view(ptr, limit - ptr);
     return true;
-}
-
-// Reads a length-prefixed slice from *input.  On success, *result holds the
-// slice data and *input is advanced past it.  Returns false if the input is
-// truncated (varint can't be decoded, or not enough bytes for the payload).
-bool get_len_prefixed_slice(std::string_view *input, std::string_view *result) {
-    uint32_t size;
-    if (get_varint_32(input, &size) && input->size() >= size) {
-        *result = std::string_view(input->data(), size);
-        input->remove_prefix(size);
-        return true;
-    } else {
-        return false;
-    }
 }
 
 } // namespace ANCHORDB_NAMESPACE

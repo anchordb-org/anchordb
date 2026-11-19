@@ -124,8 +124,6 @@ class ANCHORDB_EXPORT SequentialFileReader {
     virtual Status read(size_t n, std::string_view *result, char *scratch) = 0;
     // Advances the read position by `n` bytes without copying.
     virtual Status skip(uint64_t n) = 0;
-    // Returns the absolute byte count of a file
-    virtual size_t size() = 0;
 };
 
 // Reads a file at arbitrary offsets.
@@ -142,8 +140,6 @@ class ANCHORDB_EXPORT RandomAccessFileReader {
     // `*result` at them; the view is valid until the next call.  `*result` may
     // be shorter than `n` at end of file.
     virtual Status read(uint64_t offset, size_t n, std::string_view *result, char *scratch) = 0;
-    // Returns the absolute byte count of a file
-    virtual size_t size() = 0;
 };
 
 // Writes a file as an append-only byte stream.

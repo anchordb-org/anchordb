@@ -119,7 +119,7 @@ struct DataRecordLocation {
 // value log (vLog); it does not care which file `dest` refers to because both
 // use identical record entries.
 //
-// The writer frames records: callers hand it a key, value, type and timestamp,
+// The writer encodes records: callers hand it a key, value, type and timestamp,
 // and it encodes and appends the record.  It does not own `dest`; the caller
 // opens the intended file through Env and keeps it alive.  It tracks the
 // running append offset.  For a long-lived append-only file such as the vLog,
@@ -208,8 +208,10 @@ class DataRecordWriter {
 class DataRecordReader {
   public:
     // Reads from an already-open sequential file positioned at the first
-    // record.  `reader` is borrowed and must outlive this object.
-    explicit DataRecordReader(SequentialFileReader *reader);
+    // record.  `reader` is borrowed and must outlive this object.  `file_size`
+    // is the file's byte length, obtained from Env::get_file_size at the time
+    // the stream is opened, and bounds the record reads.
+    DataRecordReader(SequentialFileReader *reader, size_t file_size);
 
     DataRecordReader(const DataRecordReader &) = delete;
     DataRecordReader &operator=(const DataRecordReader &) = delete;

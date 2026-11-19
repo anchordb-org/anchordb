@@ -223,9 +223,8 @@ Status DataRecordWriter::close() {
     return status_;
 }
 
-DataRecordReader::DataRecordReader(SequentialFileReader *reader) : reader_(reader) {
-    if (reader_ != nullptr) { size_ = reader_->size(); }
-}
+DataRecordReader::DataRecordReader(SequentialFileReader *reader, size_t file_size)
+    : reader_(reader), size_(file_size) {}
 
 DataRecordReader::~DataRecordReader() = default;
 

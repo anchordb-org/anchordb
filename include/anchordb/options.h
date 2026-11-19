@@ -86,6 +86,10 @@ struct ANCHORDB_EXPORT Options {
     // implement it (see TableCache).
     size_t table_cache_size = 8 * 1024 * 1024;
     CacheType table_cache_type = CacheType::LRU;
+    // Shared vLog reader cache: capacity in bytes and the replacement policy
+    // used for the pool of open vLog file descriptors (see VLogReaderCache).
+    size_t vlog_reader_cache_size = 8 * 1024 * 1024;
+    CacheType vlog_reader_cache_type = CacheType::LRU;
     // Optional shared block cache.  Not owned by the database.
     Cache *block_cache = nullptr;
 

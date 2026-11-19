@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "sstable/table_cache.h"
 #include "anchordb/cache.h"
 #include "anchordb/status.h"
-#include "sstable/table_cache.h"
 #include "sstable/table_file_set.h"
 #include "util/coding.h"
 #include <string>
@@ -25,25 +25,16 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-namespace {
-
-// Builds the concrete Cache implementation selected by the options.
-Cache *make_cache(const Options &options) {
-    switch (options.table_cache_type) {
-    case CacheType::LIRS: return new_lirs_cache(options.table_cache_size, options.active_map);
-    case CacheType::ClockPro: return new_clock_pro_cache(options.table_cache_size, options.active_map);
-    case CacheType::Arc: return new_arc_cache(options.table_cache_size, options.active_map);
-    case CacheType::LRU:
-    default: return new_lru_cache(options.table_cache_size, options.active_map);
-    }
-}
-
-} // namespace
-
 TableCache::TableCache(const Options &options, std::string db_dir)
-    : options_(options), db_dir_(std::move(db_dir)), cache_(make_cache(options_)), namespace_id_(cache_.new_id()) {}
+    : options_(options), db_dir_(std::move(db_dir)),
+      vlog_cache_(new VLogReaderCache(options_.env, options_.vlog_reader_cache_size, options_.vlog_reader_cache_type,
+                                      options_.active_map)),
+      cache_(new_cache(options_.table_cache_type, options_.table_cache_size, options_.active_map)),
+      namespace_id_(cache_.new_id()) {}
 
-TableCache::~TableCache() = default;
+TableCache::~TableCache() {
+    if (vlog_cache_ != nullptr) { vlog_cache_->unref(); }
+}
 
 std::string TableCache::cache_key(uint64_t table_number) const {
     std::string key;
@@ -58,67 +49,46 @@ std::string TableCache::cache_key(uint64_t table_number) const {
 
 void TableCache::delete_entry(std::string_view, void *value) { static_cast<TableReader *>(value)->unref(); }
 
-Status TableCache::find_table(uint64_t table_number, Cache::Handle **handle, TableReader **reader) {
-    if (handle == nullptr || reader == nullptr) {
-        return Status::invalid_argument("TableCache::find_table: null output");
-    }
+Status TableCache::find_table(uint64_t table_number, CachePin<TableReader> *pin, TableReader **reader) {
+    if (pin == nullptr || reader == nullptr) { return Status::invalid_argument("TableCache::find_table: null output"); }
 
     const std::string key = cache_key(table_number);
-    Cache::Handle *cached = cache_.lookup(key);
-    if (cached != nullptr) {
-        *handle = cached;
-        *reader = static_cast<TableReader *>(cache_.value(cached));
-        return Status::ok();
-    }
+    auto open = [this, table_number](TableReader **out) {
+        return TableReader::open(options_, make_table_file_set(db_dir_, table_number), db_dir_, vlog_cache_, out);
+    };
+    auto charge = [](TableReader *opened) { return opened->cache_charge(); };
 
-    const TableFileSet files = make_table_file_set(db_dir_, table_number);
-    TableReader *opened = nullptr;
-    Status s = TableReader::open(options_, files, db_dir_, &opened);
-    if (!s.is_ok()) { return s; }
-
-    Cache::Handle *inserted = cache_.insert(key, opened, opened->cache_charge(), &delete_entry);
-    // A cache implementation that declines the entry returns no handle; the
-    // caller then owns `opened` through the null-handle convention.
-    *handle = inserted;
-    *reader = opened;
-    return Status::ok();
+    return cache_lookup_or_open<TableReader>(cache_, key, pin, reader, open, charge, &delete_entry);
 }
 
 Status TableCache::get(const ReadOptions &options, uint64_t table_number, std::string_view key, std::string *value,
                        std::string *scratch) {
-    Cache::Handle *handle = nullptr;
+    CachePin<TableReader> pin;
     TableReader *reader = nullptr;
-    Status s = find_table(table_number, &handle, &reader);
+    Status s = find_table(table_number, &pin, &reader);
     if (!s.is_ok()) { return s; }
 
     Status result = reader->get(options, key, value, scratch);
 
-    // Releasing the handle may delete the reader, so it must be the last use.
-    if (handle != nullptr) {
-        cache_.release(handle);
-    } else {
-        reader->unref();
-    }
+    // A valid pin released by its destructor may delete the reader, so this
+    // must be the last use.
+    if (!pin.valid()) { reader->unref(); }
     return result;
 }
 
 Status TableCache::new_iterator(const ReadOptions &options, uint64_t table_number, Iterator **iter) {
     if (iter == nullptr) { return Status::invalid_argument("TableCache::new_iterator: null iterator output"); }
 
-    Cache::Handle *handle = nullptr;
+    CachePin<TableReader> pin;
     TableReader *reader = nullptr;
-    Status s = find_table(table_number, &handle, &reader);
+    Status s = find_table(table_number, &pin, &reader);
     if (!s.is_ok()) { return s; }
 
     *iter = reader->new_iterator(options);
 
     // The iterator holds its own reader reference, so the cache pin (or the
     // caller's reference when the cache declined the entry) can be dropped.
-    if (handle != nullptr) {
-        cache_.release(handle);
-    } else {
-        reader->unref();
-    }
+    if (!pin.valid()) { reader->unref(); }
     return Status::ok();
 }
 

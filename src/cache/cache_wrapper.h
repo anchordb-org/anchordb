@@ -47,6 +47,9 @@ class CacheWrapper {
 
     bool valid() const { return cache_ != nullptr; }
 
+    // The wrapped Cache, for helpers that construct typed pins around it.
+    Cache *raw() const { return cache_; }
+
     Cache::Handle *insert(std::string_view key, void *value, size_t charge,
                           void (*deleter)(std::string_view key, void *value)) {
         return cache_->insert(key, value, charge, deleter);

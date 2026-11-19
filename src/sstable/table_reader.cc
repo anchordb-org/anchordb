@@ -12,10 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "sstable/table_reader.h"
 #include "anchordb/env.h"
+#include "cache/typed_cache.h"
+#include "db/vlog_reader_cache.h"
 #include "file/filename.h"
 #include "sstable/data_record.h"
-#include "sstable/table_reader.h"
 #include <cassert>
 #include <cstring>
 #include <string>
@@ -65,21 +67,6 @@ Status decode_single_record(std::string_view bytes, ParsedDataRecord *result) {
     return Status::ok();
 }
 
-// First slot of `reader` whose key is >= target (lower_bound within a block).
-size_t lower_bound(const Comparator &cmp, const IndexBlockReader &reader, std::string_view target) {
-    size_t lo = 0;
-    size_t hi = reader.size();
-    while (lo < hi) {
-        const size_t mid = lo + (hi - lo) / 2;
-        if (cmp.compare(reader.key(mid), target) < 0) {
-            lo = mid + 1;
-        } else {
-            hi = mid;
-        }
-    }
-    return lo;
-}
-
 } // namespace
 
 TableReader::~TableReader() {
@@ -87,7 +74,7 @@ TableReader::~TableReader() {
     delete filter_;
     delete index_reader_;
     delete data_reader_;
-    for (auto &entry : vlog_files_) { delete entry.second.reader; }
+    if (vlog_cache_ != nullptr) { vlog_cache_->unref(); }
 }
 
 void TableReader::unref() {
@@ -100,7 +87,8 @@ size_t TableReader::cache_charge() const {
     return summary_buffer_.size() + filter_buffer_.size() + kTableCacheEntryOverhead;
 }
 
-Status TableReader::open(const Options &options, const TableFileSet &files, std::string db_dir, TableReader **result) {
+Status TableReader::open(const Options &options, const TableFileSet &files, std::string db_dir,
+                         VLogReaderCache *vlog_cache, TableReader **result) {
     if (result == nullptr) { return Status::invalid_argument("TableReader::open: null result"); }
     if (options.env == nullptr) { return Status::invalid_argument("TableReader::open: options.env is null"); }
 
@@ -111,6 +99,8 @@ Status TableReader::open(const Options &options, const TableFileSet &files, std:
     reader->compressor_ = options.compressor;
     reader->filter_spec_ = options.filter;
     reader->db_dir_ = std::move(db_dir);
+    reader->vlog_cache_ = vlog_cache;
+    if (reader->vlog_cache_ != nullptr) { reader->vlog_cache_->ref(); }
 
     Status s = reader->init_(files);
     if (!s.is_ok()) {
@@ -239,7 +229,7 @@ Status TableReader::get(const ReadOptions &options, std::string_view key, std::s
     IndexBlockReader reader(block, block_size_);
     if (!reader.valid()) { return Status::corruption("table reader: invalid index block"); }
 
-    const size_t slot = lower_bound(comparator_, reader, key);
+    const size_t slot = reader.lower_bound(key, comparator_);
     if (slot >= reader.size() || comparator_.compare(reader.key(slot), key) != 0) {
         return Status::not_found("key not found", std::string(key));
     }
@@ -309,7 +299,7 @@ class TableIterator : public Iterator {
         }
         load_block(block_index);
         if (!status_.is_ok()) { return; }
-        slot_ = lower_bound(comparator_, *block_reader_, target);
+        slot_ = block_reader_->lower_bound(target, comparator_);
         skip_forward();
     }
 
@@ -577,16 +567,26 @@ Status TableReader::read_blob_record_(const ValueHandle &handle, std::string_vie
     if (handle.size < kDataRecordHeaderSize) {
         return Status::corruption("table reader: vLog record size too small", std::to_string(handle.size));
     }
+    if (vlog_cache_ == nullptr) {
+        return Status::not_supported("table reader: no vLog reader cache", std::to_string(handle.file_id));
+    }
 
-    VlogDescriptor descriptor;
-    Status s = get_vlog_descriptor_(handle.file_id, &descriptor);
+    const std::string filename = vlog_filename(db_dir_, handle.file_id);
+    // Use the live file size, not RandomAccessFileReader::size(): a reader
+    // cached for this file may predate later appends to the same vLog file.
+    uint64_t file_size = 0;
+    Status s = env_->get_file_size(filename, &file_size);
     if (!s.is_ok()) { return s; }
-    if (handle.offset > descriptor.size || handle.size > descriptor.size - handle.offset) {
+    if (handle.offset > file_size || handle.size > file_size - handle.offset) {
         return Status::corruption("table reader: vLog record out of range", std::to_string(handle.offset));
     }
 
+    CachePin<RandomAccessFileReader> pin;
+    s = vlog_cache_->open_reader(filename, &pin);
+    if (!s.is_ok()) { return s; }
+
     std::string_view view;
-    s = read_exact(descriptor.reader, handle.offset, handle.size, scratch, &view);
+    s = read_exact(pin.get(), handle.offset, handle.size, scratch, &view);
     if (!s.is_ok()) { return s; }
 
     ParsedDataRecord record;
@@ -595,29 +595,6 @@ Status TableReader::read_blob_record_(const ValueHandle &handle, std::string_vie
     if (!record.is_blob()) { return Status::corruption("table reader: vLog record is not a blob"); }
     if (record.key != expected_key) { return Status::corruption("table reader: vLog record key mismatch"); }
     value->assign(record.value.data(), record.value.size());
-    return Status::ok();
-}
-
-Status TableReader::get_vlog_descriptor_(uint32_t file_id, VlogDescriptor *out) const {
-    if (out == nullptr) { return Status::invalid_argument("table reader: null vLog descriptor output"); }
-
-    std::lock_guard<std::mutex> lock(vlog_mutex_);
-    const auto existing = vlog_files_.find(file_id);
-    if (existing != vlog_files_.end()) {
-        *out = existing->second;
-        return Status::ok();
-    }
-
-    const std::string filename = vlog_filename(db_dir_, file_id);
-    RandomAccessFileReader *reader = nullptr;
-    Status s = env_->new_random_access_file_reader(filename, &reader);
-    if (!s.is_ok()) { return s; }
-
-    VlogDescriptor descriptor;
-    descriptor.reader = reader;
-    descriptor.size = static_cast<uint64_t>(reader->size());
-    const auto inserted = vlog_files_.emplace(file_id, descriptor);
-    *out = inserted.first->second;
     return Status::ok();
 }
 

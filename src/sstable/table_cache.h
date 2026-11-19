@@ -18,6 +18,8 @@
 #include "anchordb/options.h"
 #include "anchordb/status.h"
 #include "cache/cache_wrapper.h"
+#include "cache/typed_cache.h"
+#include "db/vlog_reader_cache.h"
 #include "sstable/table_reader.h"
 #include <cstddef>
 #include <cstdint>
@@ -30,13 +32,16 @@ namespace ANCHORDB_NAMESPACE {
 // re-opening files and re-parsing the summary.  The backing Cache is chosen by
 // Options::table_cache_type/size and owned through a CacheWrapper.
 //
+// The cache also owns the VLogReaderCache shared by every TableReader it
+// opens, so all tables resolve a given vLog file through one open reader.
+//
 // Captured Options are forwarded unchanged to TableReader::open, so cached
 // readers use the same comparator, compressor and filter the writer used.  The
 // resident summary and filter are charged to the cache; index blocks are read
 // and decompressed per lookup.
 //
-// A cached TableReader is kept alive while a lookup handle is outstanding, so
-// the cache may evict and delete it as soon as get() releases its handle.
+// A cached TableReader is kept alive while a CachePin on it is outstanding, so
+// the cache may evict and delete it once the pin is released.
 class TableCache {
   public:
     TableCache(const Options &options, std::string db_dir);
@@ -61,11 +66,10 @@ class TableCache {
     uint64_t namespace_id() const { return namespace_id_; }
 
   private:
-    // Looks up or opens the table.  On success *reader is usable and *handle is
-    // the cache handle pinning it; release the handle when done.  A null handle
-    // means the cache did not take ownership, so the caller must delete the
-    // reader.
-    Status find_table(uint64_t table_number, Cache::Handle **handle, TableReader **reader);
+    // Looks up or opens the table.  On success `*reader` is usable.  When the
+    // returned pin is valid the cache owns the reader; otherwise the caller
+    // owns it and must unref() it.
+    Status find_table(uint64_t table_number, CachePin<TableReader> *pin, TableReader **reader);
 
     // Builds the namespaced cache key for a table number.
     std::string cache_key(uint64_t table_number) const;
@@ -75,6 +79,10 @@ class TableCache {
 
     Options options_;
     std::string db_dir_;
+    // Shared by every TableReader this cache opens.  TableReaders hold their
+    // own references, so the cache outlives iterators that outlive this
+    // TableCache.  Owned through one manual reference.
+    VLogReaderCache *vlog_cache_ = nullptr;
     CacheWrapper cache_;
     uint64_t namespace_id_;
 };

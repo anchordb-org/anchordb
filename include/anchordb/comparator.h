@@ -15,9 +15,9 @@
 #pragma once
 
 #include "anchordb/export.h"
-#include <string>
 
 #include "anchordb/anchordb_namespace.h"
+#include <string_view>
 
 namespace ANCHORDB_NAMESPACE {
 
@@ -37,15 +37,6 @@ struct ANCHORDB_EXPORT Comparator {
     // Returns a stable, human-readable name for the comparator (used for
     // diagnostics and to detect a comparator mismatch).
     const char *(*name)() = nullptr;
-
-    // Given `*start` and `limit` (both >= *start), may replace `*start` with a
-    // shorter key `s` such that *start <= s < limit.  Used to compact index
-    // blocks.
-    void (*find_shortest_separator)(std::string *start, std::string_view limit) = nullptr;
-
-    // If possible, replaces `*key` with a short key that sorts immediately
-    // after it, for index compaction.  May leave `*key` unchanged.
-    void (*find_short_successor)(std::string *key) = nullptr;
 };
 
 // Returns a comparator that orders keys by their raw bytes.

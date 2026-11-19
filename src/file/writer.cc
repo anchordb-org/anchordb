@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "writer.h"
 #include "anchordb/anchordb_namespace.h"
 #include "io_uring_config.h"
 #include "sync_io.h"
-#include "writer.h"
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -237,13 +237,5 @@ std::string PosixWritableFileWriter::dirname(const std::string &filename) {
     assert(filename.find('/', separator_pos + 1) == std::string::npos);
 
     return filename.substr(0, separator_pos);
-}
-
-std::string_view PosixWritableFileWriter::basename(const std::string &filename) {
-    std::string::size_type separator_pos = filename.rfind('/');
-    if (separator_pos == std::string::npos) { return std::string_view(filename); }
-    assert(filename.find('/', separator_pos + 1) == std::string::npos);
-
-    return std::string_view(filename.data() + separator_pos + 1, filename.length() - separator_pos - 1);
 }
 } // namespace ANCHORDB_NAMESPACE

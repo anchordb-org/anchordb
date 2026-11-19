@@ -46,8 +46,6 @@ target_sources(anchordb
         src/memtable/skiplist.h
         src/memtable/entry.h
         src/memtable/entry.cc
-        src/memtable/vlog_reader_cache.h
-        src/memtable/vlog_reader_cache.cc
         src/memtable/table.h
         src/memtable/table.cc
         src/util/coding.h
@@ -75,14 +73,18 @@ target_sources(anchordb
         src/util/filter/ribbon_filter.cc
         src/util/filter/filter.cc
         src/db/db_format.h
+        src/db/file_metadata.h
         src/db/iterator.cc
         src/db/wal_format.h
         src/db/wal_reader.h
         src/db/wal_reader.cc
         src/db/wal_writer.h
         src/db/wal_writer.cc
+        src/db/vlog_reader_cache.h
+        src/db/vlog_reader_cache.cc
         src/cache/cache.cc
         src/cache/cache_wrapper.h
+        src/cache/typed_cache.h
         src/cache/util.h
         src/cache/lru.h
         src/cache/lru.cc

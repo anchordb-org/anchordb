@@ -19,6 +19,7 @@
 #include "anchordb/iterator.h"
 #include "db/db_format.h"
 #include "file/file_meta.h"
+#include "util/aligned_buffer.h"
 #include "util/coding.h"
 #include <cstddef>
 #include <cstdint>
@@ -48,7 +49,7 @@ inline constexpr size_t kMaxIndexBlockSize = 64 * 1024;            // 64KB
 inline size_t round_index_block_size(size_t block_size) noexcept {
     if (block_size < kMinIndexBlockSize) { block_size = kMinIndexBlockSize; }
     if (block_size > kMaxIndexBlockSize) { block_size = kMaxIndexBlockSize; }
-    const size_t aligned = ((block_size + kIndexBlockAlignment - 1) / kIndexBlockAlignment) * kIndexBlockAlignment;
+    const size_t aligned = round_up(block_size, kIndexBlockAlignment);
     return aligned > kMaxIndexBlockSize ? kMaxIndexBlockSize : aligned;
 }
 
@@ -230,6 +231,10 @@ class IndexBlockReader {
     // Number of entries (slots) in the block.
     size_t size() const { return slot_count_; }
     bool empty() const { return slot_count_ == 0; }
+
+    // Index of the first entry whose key is >= `target` under `cmp`, or size()
+    // when every key is smaller.  Keys are in ascending order.
+    size_t lower_bound(std::string_view target, const Comparator &cmp) const;
 
     // Decoded entry at index (0 <= index < size()).  Slot order is ascending
     // key order.

@@ -54,6 +54,20 @@ std::string_view MemtableIterator::value() const {
     return value_scratch_;
 }
 
+MemtableEntry MemTable::RawIterator::entry() const {
+    status_ = Status::ok();
+    if (!iter_.valid()) { return MemtableEntry(); }
+
+    MemtableEntry entry;
+    const char *value_field = MemtableEntry::decode_key(iter_.key(), &entry);
+    if (value_field == nullptr) {
+        status_ = Status::corruption("memtable: invalid entry key");
+        return MemtableEntry();
+    }
+
+    return MemtableEntry(entry.key(), entry.timestamp(), entry.type(), MemtableEntry::decode_value(value_field));
+}
+
 Status MemTable::add(uint64_t timestamp, EntryType type, std::string_view key, std::string_view value) {
     if (!is_valid_entry_type(type)) { return Status::invalid_argument("memtable: invalid entry type"); }
     if (key.size() > max_key_size_) { return Status::invalid_argument("memtable: key too large"); }
@@ -155,7 +169,7 @@ Status MemTable::read_blob_(const BlobHandle &handle, std::string_view expected_
     std::string record_bytes;
     record_bytes.resize(handle.size);
     std::string_view view;
-    s = vlog_reader_cache_.read(fname, handle.offset, handle.size, &view, record_bytes.data());
+    s = vlog_reader_cache_->read(fname, handle.offset, handle.size, &view, record_bytes.data());
     if (!s.is_ok()) { return s; }
     if (view.size() != handle.size) {
         return Status::corruption("memtable: vlog record short read", std::to_string(view.size()));

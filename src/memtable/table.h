@@ -17,10 +17,10 @@
 #include "anchordb/comparator.h"
 #include "anchordb/iterator.h"
 #include "anchordb/status.h"
+#include "db/vlog_reader_cache.h"
 #include "memory/arena.h"
 #include "memtable/entry.h"
 #include "memtable/skiplist.h"
-#include "memtable/vlog_reader_cache.h"
 #include <atomic>
 #include <cassert>
 #include <cstddef>
@@ -121,7 +121,8 @@ class MemTable {
                       size_t value_threshold = 4 * 1024, Env *env = nullptr, std::string vlog_dbname = std::string())
         : comparator_(std::move(comparator)), arena_(arena_block_size), refs_{0}, max_key_size_(max_key_size),
           value_threshold_(value_threshold), vlog_writer_(vlog_writer), vlog_file_id_(vlog_file_id), env_(env),
-          vlog_dbname_(std::move(vlog_dbname)), vlog_reader_cache_(env), table_(KeyComparator(comparator_), &arena_) {}
+          vlog_dbname_(std::move(vlog_dbname)), vlog_reader_cache_(new VLogReaderCache(env)),
+          table_(KeyComparator(comparator_), &arena_) {}
 
     MemTable(const MemTable &) = delete;
     MemTable &operator=(const MemTable &) = delete;
@@ -135,9 +136,46 @@ class MemTable {
         if (old == 1) { delete this; }
     }
 
+    // Forward-only iterator over the raw stored entries of this memtable.
+    //
+    // Unlike MemtableIterator, this resolves nothing: entry().value() is
+    // exactly the bytes stored in the arena.  For EntryType::Blob that is the
+    // encoded BlobHandle (see db_format.h), so a flush can copy the handle
+    // into an SSTable index slot without touching the vLog.  The returned
+    // MemtableEntry owns no bytes; its views are valid only until next() or
+    // destruction.
+    //
+    // The memtable must be immutable while this iterator is used, consistent
+    // with the memtable's single-writer contract.
+    class RawIterator {
+      public:
+        explicit RawIterator(const Table *table) : iter_(table) {}
+
+        RawIterator(RawIterator &&) noexcept = default;
+        RawIterator &operator=(RawIterator &&) noexcept = default;
+
+        bool valid() const { return iter_.valid(); }
+        void seek_to_first() { iter_.seek_to_first(); }
+        void next() { iter_.next(); }
+
+        // Decodes the current entry.  Returns a default-constructed entry when
+        // the iterator is invalid; on a malformed key it returns a default
+        // entry and sets status() to corruption.
+        MemtableEntry entry() const;
+        Status status() const { return status_; }
+
+      private:
+        Table::Iterator iter_;
+        mutable Status status_;
+    };
+
     size_t approximate_memory_usage() const { return arena_.memory_usage(); }
 
     Iterator *new_iterator() { return new MemtableIterator(&table_, this); }
+
+    // Returns a forward-only iterator over the raw stored entries.  Used by the
+    // flush path, which needs EntryType, timestamp and the undecoded value.
+    RawIterator new_raw_iterator() const { return RawIterator(&table_); }
 
     // Inserts one entry stamped with `timestamp`.  Returns
     // Status::invalid_argument when `key` exceeds max_key_size() or `type` is
@@ -155,7 +193,10 @@ class MemTable {
   private:
     friend class MemtableIterator;
 
-    ~MemTable() { assert(refs_.load(std::memory_order_relaxed) == 0); }
+    ~MemTable() {
+        assert(refs_.load(std::memory_order_relaxed) == 0);
+        vlog_reader_cache_->unref();
+    }
 
     // Reads and decodes the vLog record referenced by `handle`, copies its
     // value into *value and validates the stored key and entry type.
@@ -170,10 +211,10 @@ class MemTable {
     uint32_t vlog_file_id_;
     Env *env_;
     std::string vlog_dbname_;
-    // Open vLog readers, keyed by file name.  Kept per memtable; the underlying
-    // Cache handles eviction and deletion.  Mutable because blob reads go
+    // Open vLog readers, keyed by file name.  Owned through one reference to
+    // the shared, reference-counted cache.  Mutable because blob reads go
     // through a const memtable view.
-    mutable VLogReaderCache vlog_reader_cache_;
+    mutable VLogReaderCache *vlog_reader_cache_;
     Table table_;
 };
 

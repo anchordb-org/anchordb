@@ -19,6 +19,7 @@
 #include <string_view>
 
 #include "anchordb/anchordb_namespace.h"
+#include "anchordb/comparator.h"
 
 namespace ANCHORDB_NAMESPACE {
 
@@ -100,14 +101,6 @@ bool IndexBlockBuilder::add(std::string_view key, ValueHandle handle, uint64_t t
     return true;
 }
 
-namespace {
-
-int ByteWiseCompare(std::string_view a, std::string_view b) { return a.compare(b); }
-
-// Fallback used when the caller supplies no comparator.
-const Comparator kByteWiseComparator{&ByteWiseCompare, nullptr, nullptr, nullptr};
-} // namespace
-
 IndexBlockReader::IndexBlockReader(std::string_view block, size_t block_size)
     : data_(block.data()), size_(block.size()), block_size_(round_index_block_size(block_size)), slot_count_(0),
       valid_(false) {
@@ -144,6 +137,20 @@ IndexBlockReader::IndexBlockReader(std::string_view block, size_t block_size)
     }
 
     valid_ = true;
+}
+
+size_t IndexBlockReader::lower_bound(std::string_view target, const Comparator &cmp) const {
+    size_t lo = 0;
+    size_t hi = slot_count_;
+    while (lo < hi) {
+        const size_t mid = lo + (hi - lo) / 2;
+        if (cmp.compare(key(mid), target) < 0) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
 }
 
 IndexBlockEntry IndexBlockReader::entry(size_t index) const {
@@ -203,18 +210,7 @@ class IndexBlockIter : public Iterator {
     }
 
     void seek(std::string_view target) override {
-        // First entry whose key is >= target (lower_bound).
-        size_t lo = 0;
-        size_t hi = reader_.size();
-        while (lo < hi) {
-            const size_t mid = lo + (hi - lo) / 2;
-            if (comparator_.compare(reader_.key(mid), target) < 0) {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        index_ = lo;
+        index_ = reader_.lower_bound(target, comparator_);
         set_current();
     }
 
@@ -275,7 +271,7 @@ class IndexBlockIter : public Iterator {
 Iterator *IndexBlockReader::new_iterator(Comparator comparator) const {
     if (!valid_) { return new_error_iterator(Status::corruption("bad index block contents")); }
     if (empty()) { return new_empty_iterator(); }
-    if (comparator.compare == nullptr) { comparator = kByteWiseComparator; }
+    if (comparator.compare == nullptr) { comparator = new_byte_wise_comparator(); }
     return new IndexBlockIter(*this, comparator);
 }
 

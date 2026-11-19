@@ -18,6 +18,7 @@
 #include "anchordb/env.h"
 #include "anchordb/status.h"
 #include "file_meta.h"
+#include "filename.h"
 #include "io_uring_config.h"
 #include "util/aligned_buffer.h"
 #include <cstdint>
@@ -54,9 +55,12 @@ class PosixWritableFileWriter final : public WritableFileWriter {
     Status sync_fd(int fd, const std::string &fd_path);
 
     std::string dirname(const std::string &filename);
-    std::string_view basename(const std::string &filename);
 
-    bool is_manifest(const std::string &filename) { return basename(filename).starts_with("MANIFEST"); }
+    bool is_manifest(const std::string &filename) {
+        uint64_t number = 0;
+        FileType type;
+        return parse_filename(filename, &number, &type) && type == FileType::kDescriptorFile;
+    }
 
     const std::string filename_;
     const bool is_manifest_;

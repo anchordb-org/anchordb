@@ -25,12 +25,12 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <map>
-#include <mutex>
 #include <string>
 #include <string_view>
 
 namespace ANCHORDB_NAMESPACE {
+
+class VLogReaderCache;
 
 // Point-read view over one SSTable.
 //
@@ -53,22 +53,25 @@ namespace ANCHORDB_NAMESPACE {
 //                  (file_id, offset, size), starting at its header
 //
 // Blob records may reference different vLog files over the life of one table.
-// The reader therefore owns a small descriptor pool that lazily opens and keeps
-// one RandomAccessFileReader per vLog file id, so repeated reads of the same
-// vLog never reopen the file.  Pool access is serialized; the readers
-// themselves are positional and may be shared by concurrent reads.
+// The reader resolves them through a shared VLogReaderCache borrowed from its
+// owner, so readers for the same vLog file are opened once and reused across
+// tables instead of being owned per table.  The reader takes its own reference
+// to the cache in open().
 //
-// A TableReader owns its readers and is non-copyable.  Its on-disk view is
-// immutable after a successful open(); only the reference count and the
-// lazily populated vLog descriptor pool change afterwards.
+// A TableReader owns its table files and is non-copyable.  Its on-disk view is
+// immutable after a successful open(); only the reference count changes
+// afterwards.
 class TableReader {
   public:
     // Opens `files` and loads the summary and filter.  `db_dir` is the database
     // directory used to build vLog file names; pass an empty string when tables
-    // are opened without a directory prefix.  On success stores a
+    // are opened without a directory prefix.  `vlog_cache` is the shared,
+    // DB-scoped cache used to resolve blob entries; the reader takes its own
+    // reference (null disables blob reads).  On success stores a
     // heap-allocated reader in *result; the caller owns it.  On failure returns
     // a non-ok Status and leaves *result untouched.
-    static Status open(const Options &options, const TableFileSet &files, std::string db_dir, TableReader **result);
+    static Status open(const Options &options, const TableFileSet &files, std::string db_dir,
+                       VLogReaderCache *vlog_cache, TableReader **result);
 
     ~TableReader();
 
@@ -109,12 +112,6 @@ class TableReader {
 
     TableReader() = default;
 
-    // An open descriptor for one vLog file.  `reader` is owned by the pool.
-    struct VlogDescriptor {
-        RandomAccessFileReader *reader = nullptr;
-        uint64_t size = 0;
-    };
-
     // Opens the data/index files, loads and parses the summary, and loads the
     // optional filter.
     Status init_(const TableFileSet &files);
@@ -134,10 +131,6 @@ class TableReader {
     // offset and size cover the whole record, starting at its header.
     Status read_blob_record_(const ValueHandle &handle, std::string_view expected_key, std::string *value,
                              std::string *scratch) const;
-
-    // Returns the cached descriptor for `file_id`, opening the vLog file on
-    // first use.  The returned reader stays valid for the reader's lifetime.
-    Status get_vlog_descriptor_(uint32_t file_id, VlogDescriptor *out) const;
 
     std::atomic<int> refs_{0};
 
@@ -162,10 +155,9 @@ class TableReader {
     uint64_t data_file_size_ = 0;
     size_t block_size_ = 0;
 
-    // Lazily opened vLog readers, one per file id.  Access is serialized;
-    // descriptors are never evicted, so returned readers stay valid.
-    mutable std::mutex vlog_mutex_;
-    mutable std::map<uint32_t, VlogDescriptor> vlog_files_;
+    // Shared vLog reader cache.  The reader holds one of its references so the
+    // cache stays alive for iterators that outlive the owner.
+    VLogReaderCache *vlog_cache_ = nullptr;
 };
 
 } // namespace ANCHORDB_NAMESPACE

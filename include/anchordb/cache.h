@@ -96,6 +96,12 @@ class ANCHORDB_EXPORT Cache {
     virtual size_t total_charge() const = 0;
 };
 
+// Creates a cache using the replacement policy selected by `type`.  `capacity`
+// bounds the sum of entry charges; `t` selects the hash-map backend used for
+// the index.  This is the shared policy-dispatch used by the table and vLog
+// reader caches.
+ANCHORDB_EXPORT Cache *new_cache(CacheType type, size_t capacity, MapType t);
+
 // Creates a cache using the LRU replacement policy.  `capacity` bounds the sum
 // of entry charges; `t` selects the hash-map backend used for the index.
 ANCHORDB_EXPORT Cache *new_lru_cache(size_t capacity, MapType t);

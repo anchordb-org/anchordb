@@ -14,20 +14,15 @@
 
 #include "sstable/summary.h"
 #include "util/coding.h"
+#include <algorithm>
 #include <cstdint>
 #include <string_view>
 #include <vector>
 
 #include "anchordb/anchordb_namespace.h"
+#include "anchordb/comparator.h"
 
 namespace ANCHORDB_NAMESPACE {
-
-namespace {
-int ByteWiseCompare(std::string_view a, std::string_view b) { return a.compare(b); }
-
-// Fallback used when the caller supplies no comparator.
-const Comparator kByteWiseComparator{&ByteWiseCompare, nullptr, nullptr, nullptr};
-} // namespace
 
 SummaryBuilder::SummaryBuilder(uint32_t block_size, uint32_t compressor_id, size_t max_key_size)
     : block_size_(block_size), compressor_id_(compressor_id), max_key_size_(max_key_size) {
@@ -64,7 +59,7 @@ bool SummaryBuilder::add(std::string_view key, uint64_t block_offset, uint32_t c
 
 SummaryReader::SummaryReader(std::string_view buffer, Comparator comparator)
     : comparator_(comparator), block_size_(0), compressor_id_(0), valid_(true) {
-    if (comparator_.compare == nullptr) { comparator_ = kByteWiseComparator; }
+    if (comparator_.compare == nullptr) { comparator_ = new_byte_wise_comparator(); }
 
     const char *p = buffer.data();
     const char *limit = p + buffer.size();
@@ -135,17 +130,10 @@ size_t SummaryReader::lower_bound(std::string_view target) const {
     if (!valid_) { return entries_.size(); }
 
     // First key >= target.
-    size_t lo = 0;
-    size_t hi = entries_.size();
-    while (lo < hi) {
-        const size_t mid = lo + (hi - lo) / 2;
-        if (comparator_.compare(entries_[mid].key, target) < 0) {
-            lo = mid + 1;
-        } else {
-            hi = mid;
-        }
-    }
-    return lo;
+    const auto it = std::lower_bound(
+        entries_.begin(), entries_.end(), target,
+        [this](const SummaryEntry &entry, std::string_view key) { return comparator_.compare(entry.key, key) < 0; });
+    return static_cast<size_t>(it - entries_.begin());
 }
 
 } // namespace ANCHORDB_NAMESPACE

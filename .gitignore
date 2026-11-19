@@ -8,7 +8,5 @@ readorder
 .kilo/
 .vscode/
 .zed/
-ARCHITECTURE.md
-sstable_review.md
 SUBSYSTEM_AUDIT.md
 IMPLEMENTATION_ROADMAP.md

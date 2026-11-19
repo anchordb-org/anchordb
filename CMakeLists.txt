@@ -75,11 +75,8 @@ target_sources(anchordb
         src/db/db_format.h
         src/db/file_metadata.h
         src/db/iterator.cc
-        src/db/wal_format.h
-        src/db/wal_reader.h
-        src/db/wal_reader.cc
-        src/db/wal_writer.h
-        src/db/wal_writer.cc
+        src/db/wal.h
+        src/db/wal.cc
         src/db/vlog_reader_cache.h
         src/db/vlog_reader_cache.cc
         src/cache/cache.cc

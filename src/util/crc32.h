@@ -32,7 +32,7 @@ uint32_t extend(uint32_t crc, const char *data, size_t n);
 uint32_t value(const char *data, size_t n);
 
 // Delta mixed into the CRC mask so that a masked CRC never contains a partial
-// frame delimiter.  AnchorDB-specific constant (not borrowed from any other
+// record delimiter.  AnchorDB-specific constant (not borrowed from any other
 // store's format).
 inline constexpr uint32_t k_mask_delta = 0x5f3759dfu;
 
@@ -42,7 +42,7 @@ inline constexpr uint32_t k_mask_delta = 0x5f3759dfu;
 inline constexpr uint32_t k_mask_rot_r = 13;
 inline constexpr uint32_t k_mask_rot_l = 19;
 
-// Masks a raw CRC32 value so that it cannot contain a partial frame delimiter.
+// Masks a raw CRC32 value so that it cannot contain a partial record delimiter.
 // The masked value is suitable for storage or transmission.
 inline uint32_t mask(uint32_t crc) { return ((crc >> k_mask_rot_r) | (crc << k_mask_rot_l)) + k_mask_delta; }
 

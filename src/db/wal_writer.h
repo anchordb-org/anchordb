@@ -26,34 +26,35 @@ namespace ANCHORDB_NAMESPACE {
 
 class WritableFileWriter;
 
-// Writes a stream of framed records to an AnchorDB write-ahead log (see
+// Writes a stream of records to an AnchorDB write-ahead log (see
 // db/wal_format.h for the on-disk format).
 //
 // The writer emits the file header when it is constructed, so it must be given
-// a fresh (empty) file.  append() writes one logical record, splitting it into
-// fragments when it exceeds `max_frame_payload`; every fragment is
-// independently checksummed.  Call flush() (hand buffered bytes to the file
-// layer) and/or sync() (flush + fsync) before acknowledging writes as durable.
+// a fresh (empty) file.  append() writes exactly one record as one header plus
+// payload, with a checksum covering the length and payload.  Call flush() (hand
+// buffered bytes to the file layer) and/or sync() (flush + fsync) before
+// acknowledging writes as durable.
 //
-// Errors are sticky: once append()/flush()/sync() fails, every later call
-// returns the same Status without touching the file again.  This prevents a
-// caller from unknowingly continuing to write a file that may be partially
-// written after an I/O error.
+// A record larger than `max_record_size` is rejected with
+// Status::invalid_argument and nothing is written; this logical rejection does
+// not poison the writer.  File-operation errors are sticky: once append(),
+// flush() or sync() fails, every later call returns the same Status without
+// touching the file again.
 //
 // Not thread-safe: use a single writer per file, serialized by the caller.
 class WALWriter {
   public:
-    // `max_frame_payload` bounds a single frame's payload and doubles as the
-    // fragmentation threshold.  Zero is clamped up to one byte, and values
-    // above UINT32_MAX are clamped down (the frame length field is 32-bit).
-    explicit WALWriter(WritableFileWriter *dest, size_t max_frame_payload = kWALDefaultMaxFramePayload);
+    // `max_record_size` bounds one record's payload and is also the read-side
+    // corruption guard.  Zero is clamped up to one byte, and values above
+    // UINT32_MAX are clamped down (the record length field is 32-bit).
+    explicit WALWriter(WritableFileWriter *dest, size_t max_record_size = kWALDefaultMaxRecordSize);
 
     WALWriter(const WALWriter &) = delete;
     WALWriter &operator=(const WALWriter &) = delete;
 
     ~WALWriter();
 
-    // Appends one logical record.  The record may be empty.  Returns the sticky
+    // Appends one record.  The record may be empty.  Returns the sticky
     // status; if a previous operation failed this returns that error and does
     // not write anything.
     Status append(std::string_view record);
@@ -64,19 +65,19 @@ class WALWriter {
     // Flushes and fsyncs the underlying file (makes prior appends durable).
     Status sync();
 
-    // Sticky status of the writer: non-ok once any operation has failed.
+    // Sticky status of the writer: non-ok once any I/O operation has failed.
     const Status &status() const { return status_; }
 
-    // Number of physical bytes handed to the file so far (file header, frame
+    // Number of physical bytes handed to the file so far (file header, record
     // headers and payloads).  Best-effort diagnostic metric.
     uint64_t bytes_written() const { return bytes_written_; }
 
   private:
-    // Encodes and appends one frame; updates the sticky status.
-    Status append_frame_(uint8_t flags, std::string_view payload);
+    // Encodes and appends one record; updates the sticky status.
+    Status append_record_(std::string_view payload);
 
     WritableFileWriter *dest_;
-    size_t max_frame_payload_;
+    size_t max_record_size_;
     Status status_;
     uint64_t bytes_written_ = 0;
 };

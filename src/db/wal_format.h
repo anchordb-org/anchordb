@@ -23,49 +23,38 @@ namespace ANCHORDB_NAMESPACE {
 
 // AnchorDB write-ahead log on-disk format (format version 1).
 //
-// An 8-byte file header is followed by a run of frames.  A logical record (one
-// atomic WAL entry) is stored in one or more frames; records larger than the
-// frame payload budget are split, and every fragment is independently
-// checksummed so a partial write is detectable.
+// A 6-byte file header is followed by a run of records.  One record is one
+// atomic WAL entry: it is written as a single unit and returned by the reader
+// as a single view.  Records are never split; a record larger than the
+// configured maximum is rejected by the writer instead.
 //
-// File header (8 bytes, once at offset 0):
-//   +-------------------+------------------+-------------------+
-//   | file_magic (4B LE)| version (2B LE)  | reserved (2B LE)  |
-//   +-------------------+------------------+-------------------+
+// File header (6 bytes, once at offset 0):
+//   +-------------------+------------------+
+//   | file_magic (4B LE)| version (2B LE)  |
+//   +-------------------+------------------+
 //
-// Frame (11-byte header followed by `payload_len` payload bytes):
-//   +-------------------+------------------+--------+---------------+---------+
-//   | frame_magic (2B)  | payload_len (4B) | flags  | crc32 (4B LE) | payload |
-//   +-------------------+------------------+--------+---------------+---------+
-//     'A''N' on disk      LE, bounded        (1B)     raw CRC32       N bytes
+// Record (8-byte header followed by `payload_len` payload bytes):
+//   +-------------------+------------------+---------+
+//   | crc32 (4B LE)     | payload_len (4B) | payload |
+//   +-------------------+------------------+---------+
+//     raw CRC32           LE                 N bytes
 //
-//   - flags marks whether a frame starts and/or ends a logical record.
-//   - crc32 is the raw (unmasked) CRC32 of the header bytes
-//     `frame_magic | payload_len | flags` followed by the payload.
+//   - crc32 covers `payload_len` followed by the payload: everything after the
+//     checksum field.
+//   - The length is fixed-width so the reader can size the payload before
+//     decoding it.  There is no per-record magic: the file header identifies
+//     the stream and the checksum validates each record.
 // ---------------------------------------------------------------------------
 
 // 'A''N''D''W' on disk (little-endian encoding of this value).
 inline constexpr uint32_t kWALFileMagic = 0x57444E41u;
 inline constexpr uint16_t kWALFormatVersion = 1;
-inline constexpr size_t kWALFileHeaderSize = 8;
+inline constexpr size_t kWALFileHeaderSize = 4 + 2; // magic, version
 
-// 'A''N' on disk.
-inline constexpr uint16_t kWALFrameMagic = 0x4E41u;
-inline constexpr size_t kWALFrameHeaderSize = 11;
+inline constexpr size_t kWALRecordHeaderSize = 4 + 4; // crc32, payload_len
 
-// Default upper bound on a single frame's payload.  It is also the
-// fragmentation threshold: logical records larger than this are split across
-// multiple frames.
-inline constexpr size_t kWALDefaultMaxFramePayload = 1u << 20; // 1 MiB
-
-// Frame flag bits.
-//
-//   first | last  -> a complete record in one frame
-//   first         -> the opening fragment of a split record
-//   (none)        -> a middle fragment of a split record
-//   last          -> the closing fragment of a split record
-inline constexpr uint8_t kWALFlagFirstFragment = 0x01;
-inline constexpr uint8_t kWALFlagLastFragment = 0x02;
-inline constexpr uint8_t kWALKnownFlags = kWALFlagFirstFragment | kWALFlagLastFragment;
+// Default upper bound on one record's payload.  This is a corruption guard: a
+// length above it is rejected before any buffer is resized.
+inline constexpr size_t kWALDefaultMaxRecordSize = 64u << 20; // 64 MiB
 
 } // namespace ANCHORDB_NAMESPACE

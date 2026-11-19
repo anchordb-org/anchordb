@@ -27,30 +27,28 @@ namespace ANCHORDB_NAMESPACE {
 
 class SequentialFileReader;
 
-// Reads the framed record stream written by WALWriter (see db/wal_format.h for
-// the on-disk format).
+// Reads the record stream written by WALWriter (see db/wal_format.h for the
+// on-disk format).
 //
 // On the first read the reader consumes and validates the file header, then
-// returns one logical record at a time, transparently reassembling fragments
-// and verifying every frame's checksum.  The caller supplies a reusable
-// `scratch` buffer; for a single-frame record `*record` views into `scratch`,
-// and for a reassembled record it views into an internal buffer, so `*record`
-// is valid only until the next call to read_record().
+// returns one record at a time, verifying each record's checksum.  A record is
+// never reassembled: it is returned as a single view, either into the caller's
+// `scratch` buffer or, for an empty record, empty.
 //
 // Return contract:
 //   * ok, *eof == false, *record set : one record was read.
-//   * ok, *eof == true               : clean end of log.  A trailing partial
-//                                      frame (a torn write from a crash) is
-//                                      treated as end of log, not an error.
+//   * ok, *eof == true               : clean end of log, or a torn trailing
+//                                      record (a partial header or payload
+//                                      left by a crash) that is discarded.
 //   * non-ok                         : corruption or I/O error; *eof == false.
 //
 // Not thread-safe: use a single reader per file.
 class WALReader {
   public:
-    // `max_frame_payload` must be at least the writer's value; a frame claiming
-    // more is rejected as corruption before any read.  Zero is clamped up to
-    // one byte and values above UINT32_MAX are clamped down.
-    explicit WALReader(SequentialFileReader *reader, size_t max_frame_payload = kWALDefaultMaxFramePayload,
+    // `max_record_size` must be at least the writer's value; a record claiming
+    // more is rejected as corruption before any buffer is resized.  Zero is
+    // clamped up to one byte and values above UINT32_MAX are clamped down.
+    explicit WALReader(SequentialFileReader *reader, size_t max_record_size = kWALDefaultMaxRecordSize,
                        bool verify_checksums = true);
 
     WALReader(const WALReader &) = delete;
@@ -58,8 +56,7 @@ class WALReader {
 
     ~WALReader();
 
-    // Reads the next logical record.  See the class comment for the return
-    // contract.
+    // Reads the next record.  See the class comment for the return contract.
     Status read_record(std::string_view *record, bool *eof, std::string *scratch);
 
     // Number of physical bytes consumed from the file so far.  Best-effort
@@ -71,20 +68,10 @@ class WALReader {
     // no bytes at all (an empty log is valid).
     Status read_file_header_(bool *empty);
 
-    // Reads and validates one frame.  On clean/partial end of log sets *eof and
-    // returns ok; on corruption or I/O error returns non-ok.
-    Status read_frame_(uint8_t *flags, std::string_view *payload, bool *eof, std::string *scratch);
-
-    // Clears any in-progress reassembly and returns a corruption status.
-    Status abort_fragment_(std::string_view msg);
-
     SequentialFileReader *reader_;
-    size_t max_frame_payload_;
+    size_t max_record_size_;
     bool verify_checksums_;
     bool header_read_ = false;
-    // Reassembly buffer for fragmented logical records.
-    std::string fragmented_;
-    bool in_fragment_ = false;
     uint64_t bytes_read_ = 0;
 };
 

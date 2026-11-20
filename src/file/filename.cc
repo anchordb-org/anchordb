@@ -62,25 +62,27 @@ std::string make_filename(std::string_view dbname, uint64_t number, std::string_
     return join_path(dbname, name);
 }
 
-std::string log_filename(std::string_view dbname, uint64_t number) { return make_filename(dbname, number, ".log"); }
+std::string log_filename(std::string_view dbname, uint64_t number) { return make_filename(dbname, number, "-Log.adb"); }
 
 std::string table_data_filename(std::string_view dbname, uint64_t number) {
-    return make_filename(dbname, number, ".data");
+    return make_filename(dbname, number, "-Data.adb");
 }
 
 std::string table_index_filename(std::string_view dbname, uint64_t number) {
-    return make_filename(dbname, number, ".index");
+    return make_filename(dbname, number, "-Index.adb");
 }
 
 std::string table_summary_filename(std::string_view dbname, uint64_t number) {
-    return make_filename(dbname, number, ".summary");
+    return make_filename(dbname, number, "-Summary.adb");
 }
 
 std::string table_filter_filename(std::string_view dbname, uint64_t number) {
-    return make_filename(dbname, number, ".filter");
+    return make_filename(dbname, number, "-Filter.adb");
 }
 
-std::string vlog_filename(std::string_view dbname, uint64_t number) { return make_filename(dbname, number, ".vlog"); }
+std::string vlog_filename(std::string_view dbname, uint64_t number) {
+    return make_filename(dbname, number, "-Vlog.adb");
+}
 
 std::string descriptor_filename(std::string_view dbname, uint64_t number) {
     char buf[32];
@@ -89,7 +91,9 @@ std::string descriptor_filename(std::string_view dbname, uint64_t number) {
     return join_path(dbname, name);
 }
 
-std::string temp_filename(std::string_view dbname, uint64_t number) { return make_filename(dbname, number, ".dbtmp"); }
+std::string temp_filename(std::string_view dbname, uint64_t number) {
+    return make_filename(dbname, number, "-Tmp.adb");
+}
 
 std::string current_filename(std::string_view dbname) { return join_path(dbname, "CURRENT"); }
 
@@ -147,19 +151,19 @@ bool parse_filename(std::string_view filename, uint64_t *number, FileType *type)
 
     uint64_t num = 0;
     if (!consume_decimal_number(&rest, &num)) { return false; }
-    if (rest == ".log") {
+    if (rest == "-Log.adb") {
         *type = FileType::kLogFile;
-    } else if (rest == ".data") {
+    } else if (rest == "-Data.adb") {
         *type = FileType::kTableDataFile;
-    } else if (rest == ".index") {
+    } else if (rest == "-Index.adb") {
         *type = FileType::kTableIndexFile;
-    } else if (rest == ".summary") {
+    } else if (rest == "-Summary.adb") {
         *type = FileType::kTableSummaryFile;
-    } else if (rest == ".filter") {
+    } else if (rest == "-Filter.adb") {
         *type = FileType::kTableFilterFile;
-    } else if (rest == ".vlog") {
+    } else if (rest == "-Vlog.adb") {
         *type = FileType::kVLogFile;
-    } else if (rest == ".dbtmp") {
+    } else if (rest == "-Tmp.adb") {
         *type = FileType::kTempFile;
     } else {
         return false;

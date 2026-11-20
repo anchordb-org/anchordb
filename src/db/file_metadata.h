@@ -15,7 +15,6 @@
 #pragma once
 
 #include "anchordb/anchordb_namespace.h"
-#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -30,14 +29,25 @@ namespace ANCHORDB_NAMESPACE {
 // timestamps let a read skip a table whose whole range is older than the
 // requested snapshot.
 struct FileMetaData {
-    uint64_t number = 0;
-    // Sum of the table's four files (data, index, summary, filter).
-    uint64_t file_size = 0;
-    size_t entry_count = 0;
+    uint64_t table_id = 0;
     std::string smallest_key;
     std::string largest_key;
-    uint64_t smallest_timestamp = 0;
-    uint64_t largest_timestamp = 0;
+    uint64_t min_ts = 0;
+    uint64_t max_ts = 0;
+
+    // Individual component file sizes in bytes
+    uint64_t data_size = 0;
+    uint64_t index_size = 0;
+    uint64_t summary_size = 0;
+    uint64_t filter_size = 0; // 0 indicates no filter file was written
+
+    uint64_t entry_count = 0; // Fixed-width uint64_t for deterministic serialization
+
+    // Helper for level size accounting & compaction scoring
+    uint64_t total_file_size() const { return data_size + index_size + summary_size + filter_size; }
+
+    // Helper to check if a filter file exists on disk
+    bool has_filter() const { return filter_size > 0; }
 };
 
 } // namespace ANCHORDB_NAMESPACE

@@ -32,8 +32,8 @@ struct TableFileSet {
     std::string filter;
 };
 
-// Builds the .data / .index / .summary / .filter file names for
-// `table_number` under `db_dir`.
+// Builds the -Data.adb / -Index.adb / -Summary.adb / -Filter.adb file names
+// for `table_number` under `db_dir`.
 inline TableFileSet make_table_file_set(std::string_view db_dir, uint64_t table_number) {
     TableFileSet set;
     set.data = table_data_filename(db_dir, table_number);

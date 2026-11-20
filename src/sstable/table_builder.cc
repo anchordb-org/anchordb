@@ -92,7 +92,7 @@ Status TableBuilder::add(std::string_view key, std::string_view value, EntryType
 
     // A blob value already lives in the vLog.  The memtable hands it over as an
     // encoded BlobHandle, which belongs in the index only; writing it to
-    // data.bin would duplicate the handle and mislabel it as an inline record.
+    // -Data.adb would duplicate the handle and mislabel it as an inline record.
     if (type == EntryType::Blob) {
         BlobHandle handle;
         if (!parse_blob_handle(value, &handle)) {
@@ -156,12 +156,12 @@ Status TableBuilder::append_index_(std::string_view key, const ValueHandle &hand
 
     if (entry_count_ == 0) {
         smallest_key_.assign(key);
-        smallest_timestamp_ = timestamp;
-        largest_timestamp_ = timestamp;
+        min_ts_ = timestamp;
+        max_ts_ = timestamp;
     }
     largest_key_.assign(key);
-    if (timestamp < smallest_timestamp_) { smallest_timestamp_ = timestamp; }
-    if (timestamp > largest_timestamp_) { largest_timestamp_ = timestamp; }
+    if (timestamp < min_ts_) { min_ts_ = timestamp; }
+    if (timestamp > max_ts_) { max_ts_ = timestamp; }
 
     last_key_.assign(key);
     last_timestamp_ = timestamp;

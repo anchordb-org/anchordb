@@ -27,13 +27,13 @@ namespace ANCHORDB_NAMESPACE {
 class WritableFileWriter;
 class SequentialFileReader;
 
-// Self-describing record format used by data.bin and the WiscKey value log
+// Self-describing record format used by -Data.adb and the WiscKey value log
 // (vLog).  The stateless encode/decode functions below are the single
 // implementation of this layout; RecordWriter, RecordReader and
 // RecordBufferReader all call them.
 //
-// data.bin stores inline and tombstone records, and an index slot addresses a
-// record by its (offset, size) in data.bin.  The vLog stores blob records with
+// -Data.adb stores inline and tombstone records, and an index slot addresses a
+// record by its (offset, size) in -Data.adb.  The vLog stores blob records with
 // the same layout, and a blob's index slot addresses the complete vLog record
 // by (file_id, record offset, record size), starting at the record header.
 //
@@ -79,7 +79,7 @@ struct ParsedDataRecord {
     uint64_t timestamp = 0;
 
     // True when this record holds a large value that belongs in the vLog
-    // instead of inline in data.bin.  In a vLog record the value bytes are
+    // instead of inline in -Data.adb.  In a vLog record the value bytes are
     // still in `value`; the index slot addresses the complete record.
     bool is_blob() const { return type == EntryType::Blob; }
     // True when this record marks a deleted key.
@@ -108,14 +108,14 @@ Status decode_data_record(std::string_view input, ParsedDataRecord *result);
 
 // Where a record landed inside a record file: the absolute byte offset of the
 // record header and the total encoded size.  This is exactly what an index slot
-// records for an inline entry in data.bin and for a blob entry in a vLog file.
+// records for an inline entry in -Data.adb and for a blob entry in a vLog file.
 struct DataRecordLocation {
     uint64_t offset = 0;
     uint32_t size = 0;
 };
 
 // Append-only writer for the shared record format (see sstable/data_record.h
-// for the wire layout).  The same writer serves both data.bin and the WiscKey
+// for the wire layout).  The same writer serves both -Data.adb and the WiscKey
 // value log (vLog); it does not care which file `dest` refers to because both
 // use identical record entries.
 //
@@ -183,7 +183,7 @@ class DataRecordWriter {
 
 // Sequential reader for the data-record format written by RecordWriter (see
 // sstable/data_record.h for the on-disk layout).  The same layout is used by
-// data.bin and the vLog, so this reader serves both.
+// -Data.adb and the vLog, so this reader serves both.
 //
 // next() reads exactly the bytes of one record through the borrowed
 // SequentialFileReader: the fixed header, the uint16_t key_size, the key, the

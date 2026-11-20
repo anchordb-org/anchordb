@@ -41,14 +41,14 @@ class VLogReaderCache;
 //   filter -> summary -> index block -> data record / vLog record
 //
 //   1. The filter is consulted first.  A definite miss returns
-//      Status::not_found without touching index.bin or data.bin.
+//      Status::not_found without touching -Index.adb or -Data.adb.
 //   2. SummaryReader maps the key to the first index block whose greatest key
 //      is >= the target.
 //   3. That block is read through RandomAccessFileReader, decompressed when the
 //      table uses an active compressor, and parsed by IndexBlockReader.
 //   4. The index slot's ValueHandle selects the payload:
-//        Inline    read the data record from data.bin and decode it
-//        Tombstone read the tombstone from data.bin and report not_found
+//        Inline    read the data record from -Data.adb and decode it
+//        Tombstone read the tombstone from -Data.adb and report not_found
 //        Blob      read the complete vLog record named by
 //                  (file_id, offset, size), starting at its header
 //

@@ -25,22 +25,22 @@ namespace ANCHORDB_NAMESPACE {
 // file's suffix (or its whole name for singleton files) so a name is
 // self-describing and can be classified again during recovery.
 enum class FileType : uint8_t {
-    kLogFile = 0,      // <db>/<number>.log      write-ahead log
-    kTableDataFile,    // <db>/<number>.data     SSTable data
-    kTableIndexFile,   // <db>/<number>.index    SSTable index
-    kTableSummaryFile, // <db>/<number>.summary  SSTable summary
-    kVLogFile,         // <db>/<number>.vlog     WiscKey value log
-    kDescriptorFile,   // <db>/MANIFEST-<number> version edit log
-    kTempFile,         // <db>/<number>.dbtmp    temporary file
-    kCurrentFile,      // <db>/CURRENT           points at the live MANIFEST
-    kLockFile,         // <db>/LOCK              single-process lock
-    kInfoLogFile,      // <db>/LOG               human-readable info log
-    kTableFilterFile,  // <db>/<number>.filter   SSTable key filter
+    kLogFile = 0,      // <db>/<number>-Log.adb     write-ahead log
+    kTableDataFile,    // <db>/<number>-Data.adb    SSTable data
+    kTableIndexFile,   // <db>/<number>-Index.adb   SSTable index
+    kTableSummaryFile, // <db>/<number>-Summary.adb SSTable summary
+    kVLogFile,         // <db>/<number>-Vlog.adb    WiscKey value log
+    kDescriptorFile,   // <db>/MANIFEST-<number>    version edit log
+    kTempFile,         // <db>/<number>-Tmp.adb     temporary file
+    kCurrentFile,      // <db>/CURRENT              points at the live MANIFEST
+    kLockFile,         // <db>/LOCK                 single-process lock
+    kInfoLogFile,      // <db>/LOG                  human-readable info log
+    kTableFilterFile,  // <db>/<number>-Filter.adb  SSTable key filter
 };
 
 // Builds "<dbname>/<number zero-padded to 6><suffix>".  `dbname` may be empty,
 // in which case no directory prefix is written.  `suffix` is appended verbatim,
-// so it should include a leading '.' for ".log"-style names.
+// so it should include the literal separator and extension, such as "-Log.adb".
 std::string make_filename(std::string_view dbname, uint64_t number, std::string_view suffix);
 
 // Numbered file builders.

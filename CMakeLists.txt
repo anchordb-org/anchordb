@@ -74,6 +74,8 @@ target_sources(anchordb
         src/util/filter/filter.cc
         src/db/db_format.h
         src/db/file_metadata.h
+        src/db/flush.h
+        src/db/flush.cc
         src/db/iterator.cc
         src/db/wal.h
         src/db/wal.cc

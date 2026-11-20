@@ -83,8 +83,8 @@ Status MemTable::add(uint64_t timestamp, EntryType type, std::string_view key, s
         DataRecordLocation location;
         Status s = vlog_writer_->add(key, value, EntryType::Blob, timestamp, &location);
         if (!s.is_ok()) { return s; }
-        // Make the record visible to a reader that opens the file separately.
-        s = vlog_writer_->flush();
+        // Make the record durable before the WAL records a handle to it.
+        s = vlog_writer_->sync();
         if (!s.is_ok()) { return s; }
 
         BlobHandle handle;

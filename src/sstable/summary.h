@@ -27,7 +27,7 @@ namespace ANCHORDB_NAMESPACE {
 
 // Size of the summary header: the index-block segment size and the id of the
 // compressor used for every index block.  Written once at the start of
-// summary.bin.
+// -Summary.adb.
 inline constexpr size_t kSummaryHeaderSize = 2 * sizeof(uint32_t); // 8 bytes
 
 // Fixed on-disk sizes of a summary index entry's non-key fields.

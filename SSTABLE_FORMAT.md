@@ -1,9 +1,9 @@
 # SSTable On-Disk Format
 
-Binary layout of the SSTable data path (`.data`, `.index`, `.summary`,
-`.filter`) and the WiscKey value log (`.vLog`). This document is a
-specification of the current implementation; the normative source of truth is
-the code written throughout the codebase.
+Binary layout of the SSTable data path (`-Data.adb`, `-Index.adb`,
+`-Summary.adb`, `-Filter.adb`) and the WiscKey value log (`-Vlog.adb`). This
+document is a specification of the current implementation; the normative source
+of truth is the code written throughout the codebase.
 
 ## Conventions
 
@@ -13,28 +13,28 @@ the code written throughout the codebase.
   MSB is the continuation flag).
 - Sizes are byte counts. Offsets are absolute within the named file unless
   explicitly described as block-local.
-- Keys stored in `data.bin`, `index.bin`, and `summary.bin` are **user keys**;
+- Keys stored in `-Data.adb`, `-Index.adb`, and `-Summary.adb` are **user keys**;
   the 8-byte internal-key trailer is not used in these files.
 - `EntryType` is a single byte:
 
   | Value  | Name        | Meaning                           |
   | ------ | ----------- | --------------------------------- |
   | `0x00` | `Tombstone` | Key deletion marker               |
-  | `0x01` | `Inline`    | Value stored inline in `data.bin` |
+  | `0x01` | `Inline`    | Value stored inline in `-Data.adb` |
   | `0x02` | `Blob`      | Value stored in a vLog file       |
 
 ### File overview
 
-| File          | Contents                                                            |
-| ------------- | ------------------------------------------------------------------- |
-| `data.bin`    | Concatenated data records (inline values and tombstones)            |
-| `index.bin`   | Concatenated fixed-size index-block segments, optionally compressed |
-| `summary.bin` | Top-level sparse index: one entry per index block                   |
-| `filter.bin`  | Per-table membership filter                                         |
-| vLog files    | Concatenated data records whose `EntryType` is `Blob`               |
+| File           | Contents                                                            |
+| -------------- | ------------------------------------------------------------------- |
+| `-Data.adb`    | Concatenated data records (inline values and tombstones)            |
+| `-Index.adb`   | Concatenated fixed-size index-block segments, optionally compressed |
+| `-Summary.adb` | Top-level sparse index: one entry per index block                   |
+| `-Filter.adb`  | Per-table membership filter                                         |
+| vLog files     | Concatenated data records whose `EntryType` is `Blob`               |
 
-`data.bin` and the vLog use the **same record format**. An index slot addresses
-an inline record by `(offset, size)` into `data.bin`, and a blob's index slot
+`-Data.adb` and the vLog use the **same record format**. An index slot addresses
+an inline record by `(offset, size)` into `-Data.adb`, and a blob's index slot
 addresses the complete vLog record by `(file_id, record_offset, record_size)`.
 In both cases `offset` points at the start of the record header and `size` is
 the full encoded record size.
@@ -43,7 +43,7 @@ the full encoded record size.
 
 ## 1. Data Record
 
-Used by `data.bin` and the WiscKey value log. Encode/decode lives in
+Used by `-Data.adb` and the WiscKey value log. Encode/decode lives in
 `src/sstable/data_record.{h,cc}` and is shared by `RecordWriter`,
 `RecordReader`, and `RecordBufferReader`.
 
@@ -80,7 +80,7 @@ Notes:
 
 ## 2. Index Block
 
-An index block is a fixed-size, self-contained segment. `index.bin` is a run of
+An index block is a fixed-size, self-contained segment. `-Index.adb` is a run of
 these segments back-to-back from offset 0. Layout and code are in
 `src/sstable/idx_block_writer.{h,cc}` and `idx_block_reader.{h,cc}`.
 
@@ -135,11 +135,11 @@ starts at block-local offset `8 + i * 19`.
 | 2      | 1     | `type`               | `EntryType`                                                                     |
 | 3      | 4     | `file_id`            | vLog file id for `Blob`; always 0 for inline/tombstone                          |
 | 7      | 4     | `size`               | Full encoded record size for inline and blob entries                            |
-| 11     | 8     | `data_global_offset` | Inline: absolute offset in `data.bin`. Blob: absolute record offset in the vLog |
+| 11     | 8     | `data_global_offset` | Inline: absolute offset in `-Data.adb`. Blob: absolute record offset in the vLog |
 
 The fields above form `ValueHandle { type, file_id, offset, size }`.
 For inline entries `(data_global_offset, size)` covers the whole encoded data
-record in `data.bin`. For blob entries `(file_id, data_global_offset, size)`
+record in `-Data.adb`. For blob entries `(file_id, data_global_offset, size)`
 covers the whole encoded record in the vLog, starting at its header.
 
 The memtable `BlobHandle` in `src/db/db_format.h` uses the same convention:
@@ -180,7 +180,7 @@ payload so the index block is self-describing.
   `free_space_boundary` beyond `UINT16_MAX`.
 - On disk, a block may be compressed. The summary records the stored
   (possibly compressed) size, and the summary header records the compressor id.
-  Compression is applied **per block**; `index.bin` itself has no other framing.
+  Compression is applied **per block**; `-Index.adb` itself has no other framing.
 
 ### Index iterator value (in-memory only)
 
@@ -197,8 +197,8 @@ payload so the index block is self-describing.
 
 ## 3. Summary Index
 
-`summary.bin` is the sparse top-level index: one entry per index block, mapping
-the block's greatest key to its location in `index.bin`. Layout and code are in
+`-Summary.adb` is the sparse top-level index: one entry per index block, mapping
+the block's greatest key to its location in `-Index.adb`. Layout and code are in
 `src/sstable/summary.{h,cc}`.
 
 ```
@@ -228,7 +228,7 @@ Entries are appended in ascending key order.
 | --------- | ----------------- | --------------------------------------------------------- |
 | 4 B       | `key_len`         | `uint32_t` length of the separator key                    |
 | `key_len` | `key_bytes`       | Greatest key in the referenced index block                |
-| 8 B       | `block_offset`    | Absolute byte offset of the block in `index.bin`          |
+| 8 B       | `block_offset`    | Absolute byte offset of the block in `-Index.adb`          |
 | 4 B       | `compressed_size` | On-disk byte length of the stored block at `block_offset` |
 
 Readers seek by taking the first entry whose key is `>= target`. A missing entry
@@ -239,7 +239,7 @@ checksummed.
 
 ## 4. Filter Block
 
-`filter.bin` stores one membership filter for the whole table, built from the
+`-Filter.adb` stores one membership filter for the whole table, built from the
 distinct user keys in ascending order (consecutive duplicates dropped). Layout
 and code are in `src/sstable/filter.{h,cc}`.
 

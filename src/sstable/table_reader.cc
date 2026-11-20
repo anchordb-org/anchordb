@@ -164,7 +164,7 @@ Status TableReader::init_(const TableFileSet &files) {
 
     // The summary header pins the index-block segment size for this table, and
     // its entries are the source of truth for the block layout.  Validate that
-    // every entry maps inside index.bin before any read uses it.
+    // every entry maps inside -Index.adb before any read uses it.
     block_size_ = summary_->block_size();
     if (block_size_ == 0) { return Status::corruption("table reader: zero index block size"); }
     for (size_t i = 0; i < summary_->size(); ++i) {

@@ -86,6 +86,13 @@ class ANCHORDB_EXPORT Env {
     virtual Status get_file_size(const std::string &fname, uint64_t *size) = 0;
     // Renames `src` to `target`, replacing `target` if it exists.
     virtual Status rename_file(const std::string &src, const std::string &target) = 0;
+    // Flushes the directory's metadata (for example after a rename) so the
+    // change survives a crash.  Environments without directory fsync keep the
+    // default no-op implementation.
+    virtual Status sync_dir(const std::string &dirname) {
+        (void)dirname;
+        return Status::ok();
+    }
 
     // Acquires an exclusive lock on `fname`, storing the lock token in `*lock`.
     // The caller owns the token and releases it with unlock_file().
@@ -222,6 +229,7 @@ class ANCHORDB_EXPORT EnvWrapper : public Env {
     Status remove_dir(const std::string &d) override { return target_->remove_dir(d); }
     Status get_file_size(const std::string &f, uint64_t *s) override { return target_->get_file_size(f, s); }
     Status rename_file(const std::string &s, const std::string &t) override { return target_->rename_file(s, t); }
+    Status sync_dir(const std::string &d) override { return target_->sync_dir(d); }
     Status lock_file(const std::string &f, FileLock **l) override { return target_->lock_file(f, l); }
     Status unlock_file(FileLock *l) override { return target_->unlock_file(l); }
     void schedule(void (*f)(void *), void *a) override { return target_->schedule(f, a); }

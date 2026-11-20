@@ -77,8 +77,16 @@ target_sources(anchordb
         src/db/flush.h
         src/db/flush.cc
         src/db/iterator.cc
+        src/db/log.h
+        src/db/log.cc
+        src/db/manifest.h
+        src/db/version.h
+        src/db/version.cc
+        src/db/version_edit.h
+        src/db/version_edit.cc
+        src/db/version_set.h
+        src/db/version_set.cc
         src/db/wal.h
-        src/db/wal.cc
         src/db/vlog_reader_cache.h
         src/db/vlog_reader_cache.cc
         src/cache/cache.cc

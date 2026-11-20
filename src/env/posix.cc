@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "env/posix.h"
 #include "anchordb/env.h"
 #include "anchordb/status.h"
 #include "env/env_default.h"
-#include "env/posix.h"
 #include "file/random_access_reader.h"
 #include "file/sequential_reader.h"
 #include "file/writer.h"
@@ -264,6 +264,17 @@ Status PosixEnv::get_file_size(const std::string &filename, uint64_t *size) {
 
 Status PosixEnv::rename_file(const std::string &from, const std::string &to) {
     if (::rename(from.c_str(), to.c_str()) != 0) { return posix_error(from, errno); }
+    return Status::ok();
+}
+
+Status PosixEnv::sync_dir(const std::string &dirname) {
+    int fd = ::open(dirname.c_str(), O_RDONLY | O_DIRECTORY | kOpenBaseFlags);
+    if (fd < 0) { return posix_error(dirname, errno); }
+
+    const int result = ::fsync(fd);
+    const int saved_errno = errno;
+    ::close(fd);
+    if (result != 0) { return posix_error(dirname, saved_errno); }
     return Status::ok();
 }
 

@@ -92,6 +92,7 @@ class PosixEnv : public Env {
     Status remove_dir(const std::string &dir_name) override;
     Status get_file_size(const std::string &filename, uint64_t *size) override;
     Status rename_file(const std::string &from, const std::string &to) override;
+    Status sync_dir(const std::string &dirname) override;
 
     Status lock_file(const std::string &filename, FileLock **lock) override;
     Status unlock_file(FileLock *posix_file_lock) override;

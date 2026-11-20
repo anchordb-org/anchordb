@@ -122,39 +122,39 @@ Status VersionEdit::encode(std::string *payload) const {
     payload->clear();
 
     if (has_comparator_name_) {
-        payload->push_back(static_cast<char>(VersionEditTag::kComparator));
+        payload->push_back(static_cast<char>(VersionEditTag::Comparator));
         Status s = put_length_prefixed(payload, comparator_name_);
         if (!s.is_ok()) { return s; }
     }
     if (has_log_number_) {
-        payload->push_back(static_cast<char>(VersionEditTag::kLogNumber));
+        payload->push_back(static_cast<char>(VersionEditTag::LogNumber));
         put_varint_64(payload, log_number_);
     }
     if (has_next_file_number_) {
-        payload->push_back(static_cast<char>(VersionEditTag::kNextFileNumber));
+        payload->push_back(static_cast<char>(VersionEditTag::NextFileNumber));
         put_varint_64(payload, next_file_number_);
     }
     if (has_last_timestamp_) {
-        payload->push_back(static_cast<char>(VersionEditTag::kLastTimestamp));
+        payload->push_back(static_cast<char>(VersionEditTag::LastTimestamp));
         put_fixed_64(payload, last_timestamp_);
     }
 
     for (const CompactPointer &pointer : compact_pointers_) {
-        payload->push_back(static_cast<char>(VersionEditTag::kCompactPointer));
+        payload->push_back(static_cast<char>(VersionEditTag::CompactPointer));
         put_varint_32(payload, pointer.level);
         Status s = put_length_prefixed(payload, pointer.key);
         if (!s.is_ok()) { return s; }
     }
 
     for (const DeletedTable &table : deleted_tables_) {
-        payload->push_back(static_cast<char>(VersionEditTag::kDeletedTable));
+        payload->push_back(static_cast<char>(VersionEditTag::DeletedTable));
         put_varint_32(payload, table.level);
         put_varint_64(payload, table.table_id);
     }
 
     for (const AddedTable &table : added_tables_) {
         const FileMetaData &meta = table.meta;
-        payload->push_back(static_cast<char>(VersionEditTag::kAddedTable));
+        payload->push_back(static_cast<char>(VersionEditTag::AddedTable));
         put_varint_32(payload, table.level);
         put_varint_64(payload, meta.table_id);
         Status s = put_length_prefixed(payload, meta.smallest_key);
@@ -171,25 +171,25 @@ Status VersionEdit::encode(std::string *payload) const {
     }
 
     if (has_vlog_head_) {
-        payload->push_back(static_cast<char>(VersionEditTag::kVlogHead));
+        payload->push_back(static_cast<char>(VersionEditTag::VlogHead));
         put_fixed_32(payload, vlog_head_.file_id);
         put_fixed_64(payload, vlog_head_.offset);
     }
     if (has_vlog_tail_) {
-        payload->push_back(static_cast<char>(VersionEditTag::kVlogTail));
+        payload->push_back(static_cast<char>(VersionEditTag::VlogTail));
         put_fixed_32(payload, vlog_tail_.file_id);
         put_fixed_64(payload, vlog_tail_.offset);
     }
 
     for (const VlogSegmentStat &stat : vlog_segment_stats_) {
-        payload->push_back(static_cast<char>(VersionEditTag::kVlogSegmentStat));
+        payload->push_back(static_cast<char>(VersionEditTag::VlogSegmentStat));
         put_fixed_32(payload, stat.file_id);
         put_fixed_64(payload, stat.total_size);
         put_fixed_64(payload, stat.stale_bytes);
     }
 
     for (uint32_t file_id : deleted_vlog_segments_) {
-        payload->push_back(static_cast<char>(VersionEditTag::kDeletedVlogSegment));
+        payload->push_back(static_cast<char>(VersionEditTag::DeletedVlogSegment));
         put_fixed_32(payload, file_id);
     }
 
@@ -204,27 +204,27 @@ Status VersionEdit::decode(std::string_view payload) {
         payload.remove_prefix(1);
 
         switch (tag) {
-        case VersionEditTag::kComparator: {
+        case VersionEditTag::Comparator: {
             if (!read_length_prefixed(&payload, &comparator_name_)) { return corruption("truncated comparator"); }
             has_comparator_name_ = true;
             break;
         }
-        case VersionEditTag::kLogNumber: {
+        case VersionEditTag::LogNumber: {
             if (!read_varint_64(&payload, &log_number_)) { return corruption("truncated log number"); }
             has_log_number_ = true;
             break;
         }
-        case VersionEditTag::kNextFileNumber: {
+        case VersionEditTag::NextFileNumber: {
             if (!read_varint_64(&payload, &next_file_number_)) { return corruption("truncated next file number"); }
             has_next_file_number_ = true;
             break;
         }
-        case VersionEditTag::kLastTimestamp: {
+        case VersionEditTag::LastTimestamp: {
             if (!read_fixed_64(&payload, &last_timestamp_)) { return corruption("truncated last timestamp"); }
             has_last_timestamp_ = true;
             break;
         }
-        case VersionEditTag::kCompactPointer: {
+        case VersionEditTag::CompactPointer: {
             CompactPointer pointer;
             if (!read_varint_32(&payload, &pointer.level) || !read_length_prefixed(&payload, &pointer.key)) {
                 return corruption("truncated compact pointer");
@@ -232,7 +232,7 @@ Status VersionEdit::decode(std::string_view payload) {
             compact_pointers_.push_back(std::move(pointer));
             break;
         }
-        case VersionEditTag::kDeletedTable: {
+        case VersionEditTag::DeletedTable: {
             DeletedTable table;
             if (!read_varint_32(&payload, &table.level) || !read_varint_64(&payload, &table.table_id)) {
                 return corruption("truncated deleted table");
@@ -240,7 +240,7 @@ Status VersionEdit::decode(std::string_view payload) {
             deleted_tables_.push_back(table);
             break;
         }
-        case VersionEditTag::kAddedTable: {
+        case VersionEditTag::AddedTable: {
             AddedTable table;
             FileMetaData &meta = table.meta;
             if (!read_varint_32(&payload, &table.level) || !read_varint_64(&payload, &meta.table_id) ||
@@ -254,21 +254,21 @@ Status VersionEdit::decode(std::string_view payload) {
             added_tables_.push_back(std::move(table));
             break;
         }
-        case VersionEditTag::kVlogHead: {
+        case VersionEditTag::VlogHead: {
             if (!read_fixed_32(&payload, &vlog_head_.file_id) || !read_fixed_64(&payload, &vlog_head_.offset)) {
                 return corruption("truncated vLog head");
             }
             has_vlog_head_ = true;
             break;
         }
-        case VersionEditTag::kVlogTail: {
+        case VersionEditTag::VlogTail: {
             if (!read_fixed_32(&payload, &vlog_tail_.file_id) || !read_fixed_64(&payload, &vlog_tail_.offset)) {
                 return corruption("truncated vLog tail");
             }
             has_vlog_tail_ = true;
             break;
         }
-        case VersionEditTag::kVlogSegmentStat: {
+        case VersionEditTag::VlogSegmentStat: {
             VlogSegmentStat stat;
             if (!read_fixed_32(&payload, &stat.file_id) || !read_fixed_64(&payload, &stat.total_size) ||
                 !read_fixed_64(&payload, &stat.stale_bytes)) {
@@ -277,7 +277,7 @@ Status VersionEdit::decode(std::string_view payload) {
             vlog_segment_stats_.push_back(stat);
             break;
         }
-        case VersionEditTag::kDeletedVlogSegment: {
+        case VersionEditTag::DeletedVlogSegment: {
             uint32_t file_id = 0;
             if (!read_fixed_32(&payload, &file_id)) { return corruption("truncated deleted vLog segment"); }
             deleted_vlog_segments_.push_back(file_id);

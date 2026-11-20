@@ -30,48 +30,48 @@ namespace ANCHORDB_NAMESPACE {
 // record supplies the checksum and length frame.  The numeric values are part
 // of the on-disk format and must not be renumbered.
 enum class VersionEditTag : uint8_t {
-    kComparator = 0x01,
-    kLogNumber = 0x02,
-    kNextFileNumber = 0x03,
-    kLastTimestamp = 0x04,
-    kCompactPointer = 0x05,
-    kDeletedTable = 0x06,
-    kAddedTable = 0x07,
-    kVlogHead = 0x08,
-    kVlogTail = 0x09,
-    kVlogSegmentStat = 0x0A,
-    kDeletedVlogSegment = 0x0B,
+    Comparator = 0x01,
+    LogNumber = 0x02,
+    NextFileNumber = 0x03,
+    LastTimestamp = 0x04,
+    CompactPointer = 0x05,
+    DeletedTable = 0x06,
+    AddedTable = 0x07,
+    VlogHead = 0x08,
+    VlogTail = 0x09,
+    VlogSegmentStat = 0x0A,
+    DeletedVlogSegment = 0x0B,
 };
 
-// One `kCompactPointer` entry: the next start key for round-robin compaction at
+// One `VersionEditTag::CompactPointer` entry: the next start key for round-robin compaction at
 // `level`.
 struct CompactPointer {
     uint32_t level = 0;
     std::string key;
 };
 
-// One `kDeletedTable` entry: `table_id` (and its four split files) is obsolete
+// One `VersionEditTag::DeletedTable` entry: `table_id` (and its four split files) is obsolete
 // in `level`.
 struct DeletedTable {
     uint32_t level = 0;
     uint64_t table_id = 0;
 };
 
-// One `kAddedTable` entry: atomically commit `meta`'s four-file SSTable into
+// One `VersionEditTag::AddedTable` entry: atomically commit `meta`'s four-file SSTable into
 // `level`.
 struct AddedTable {
     uint32_t level = 0;
     FileMetaData meta;
 };
 
-// A committed position in a vLog file.  Used by both `kVlogHead` and
-// `kVlogTail`.
+// A committed position in a vLog file.  Used by both `VersionEditTag::VlogHead` and
+// `VersionEditTag::VlogTail`.
 struct VlogPosition {
     uint32_t file_id = 0;
     uint64_t offset = 0;
 };
 
-// One `kVlogSegmentStat` entry: byte accounting for vLog `file_id`.
+// One `VersionEditTag::VlogSegmentStat` entry: byte accounting for vLog `file_id`.
 struct VlogSegmentStat {
     uint32_t file_id = 0;
     uint64_t total_size = 0;

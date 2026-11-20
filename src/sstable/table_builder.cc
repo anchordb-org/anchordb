@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "anchordb/env.h"
 #include "sstable/table_builder.h"
+#include "anchordb/env.h"
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -24,12 +24,14 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-TableBuilder::TableBuilder(const Options &options, const TableFileSet &files, const size_t writable_file_buf_size)
-    : comparator_(options.comparator), compressor_(options.compressor), compression_level_(options.compression_level),
-      block_writer_(options.block_size, options.max_key_size),
+TableBuilder::TableBuilder(Env *env, const TableFileSet &files, const Comparator &comparator,
+                           const Compressor &compressor, int compression_level, size_t block_size, size_t max_key_size,
+                           const Filter &filter, const size_t writable_file_buf_size)
+    : comparator_(comparator), compressor_(compressor), compression_level_(compression_level),
+      block_writer_(block_size, max_key_size),
       summary_(static_cast<uint32_t>(block_writer_.block_size()), compressor_.compress != nullptr ? compressor_.id : 0,
                block_writer_.max_key_size()),
-      filter_builder_(options.filter), env_(options.env), files_(files) {
+      filter_builder_(filter), env_(env), files_(files) {
     if (comparator_.compare == nullptr) { comparator_ = new_byte_wise_comparator(); }
     if (env_ == nullptr) {
         status_ = Status::invalid_argument("table builder: null env");

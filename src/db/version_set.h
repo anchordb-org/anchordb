@@ -15,7 +15,7 @@
 #pragma once
 
 #include "anchordb/anchordb_namespace.h"
-#include "anchordb/options.h"
+#include "anchordb/comparator.h"
 #include "anchordb/status.h"
 #include "db/file_metadata.h"
 #include "db/version.h"
@@ -29,10 +29,8 @@
 
 namespace ANCHORDB_NAMESPACE {
 
+class Env;
 class ManifestFile;
-
-// Number of levels used when the caller does not choose a different width.
-inline constexpr size_t kDefaultNumLevels = 7;
 
 // Owns the durable version metadata, the current immutable Version, and the
 // live-file bookkeeping that flush/compaction/vLog GC depend on.
@@ -64,11 +62,12 @@ inline constexpr size_t kDefaultNumLevels = 7;
 // DB-level lock when they can race with an install.
 class VersionSet {
   public:
-    // `options.env`, `options.comparator`, `options.manifest_max_file_size`
-    // and `dbname` are captured at construction; the Env is borrowed and must
-    // outlive this object.  A `manifest_max_file_size` of 0 disables automatic
-    // MANIFEST rotation.
-    VersionSet(const Options &options, std::string dbname, size_t num_levels = kDefaultNumLevels);
+    // `env`, `comparator`, `num_levels`, `manifest_max_bytes` and `dbname` are
+    // captured at construction; the Env is borrowed and must outlive this
+    // object.  A `manifest_max_bytes` of 0 disables automatic MANIFEST
+    // rotation.  The DB/orchestrator layer derives these values from Options.
+    VersionSet(Env *env, const Comparator &comparator, std::string dbname, size_t num_levels,
+               uint64_t manifest_max_bytes);
 
     VersionSet(const VersionSet &) = delete;
     VersionSet &operator=(const VersionSet &) = delete;

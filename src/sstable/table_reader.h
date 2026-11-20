@@ -15,6 +15,9 @@
 #pragma once
 
 #include "anchordb/anchordb_namespace.h"
+#include "anchordb/comparator.h"
+#include "anchordb/compressor.h"
+#include "anchordb/filter.h"
 #include "anchordb/iterator.h"
 #include "anchordb/options.h"
 #include "anchordb/status.h"
@@ -67,11 +70,14 @@ class TableReader {
     // directory used to build vLog file names; pass an empty string when tables
     // are opened without a directory prefix.  `vlog_cache` is the shared,
     // DB-scoped cache used to resolve blob entries; the reader takes its own
-    // reference (null disables blob reads).  On success stores a
-    // heap-allocated reader in *result; the caller owns it.  On failure returns
-    // a non-ok Status and leaves *result untouched.
-    static Status open(const Options &options, const TableFileSet &files, std::string db_dir,
-                       VLogReaderCache *vlog_cache, TableReader **result);
+    // reference (null disables blob reads).  `comparator`, `compressor` and
+    // `filter` describe the table format and are supplied by the DB/orchestrator
+    // layer from Options.  On success stores a heap-allocated reader in *result;
+    // the caller owns it.  On failure returns a non-ok Status and leaves *result
+    // untouched.
+    static Status open(Env *env, const Comparator &comparator, const Compressor &compressor, const Filter &filter,
+                       const TableFileSet &files, std::string db_dir, VLogReaderCache *vlog_cache,
+                       TableReader **result);
 
     ~TableReader();
 

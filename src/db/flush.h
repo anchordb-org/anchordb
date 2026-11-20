@@ -15,14 +15,18 @@
 #pragma once
 
 #include "anchordb/anchordb_namespace.h"
-#include "anchordb/options.h"
+#include "anchordb/comparator.h"
+#include "anchordb/compressor.h"
+#include "anchordb/filter.h"
 #include "anchordb/status.h"
 #include "db/file_metadata.h"
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
 namespace ANCHORDB_NAMESPACE {
 
+class Env;
 class MemTable;
 
 // Writes one immutable memtable into a single SSTable through TableBuilder.
@@ -40,13 +44,15 @@ class MemTable;
 // if the job fails, TableBuilder::abort() removes the partial files.
 //
 // The caller must ensure `table_number` is unused and that the memtable has no
-// concurrent writer.  `options.comparator` must match the comparator the
-// memtable was built with.
+// concurrent writer.  `comparator` must match the comparator the memtable was
+// built with.  The DB/orchestrator layer derives the format settings from
+// Options.
 class FlushJob {
   public:
-    // `options` and `memtable` are borrowed and must outlive the job and any
-    // call to run().
-    FlushJob(const Options &options, std::string dbname, uint64_t table_number, const MemTable &memtable);
+    // `memtable` is borrowed and must outlive the job and any call to run().
+    FlushJob(Env *env, std::string dbname, uint64_t table_number, const MemTable &memtable,
+             const Comparator &comparator, const Compressor &compressor, int compression_level, size_t block_size,
+             size_t max_key_size, const Filter &filter);
 
     FlushJob(const FlushJob &) = delete;
     FlushJob &operator=(const FlushJob &) = delete;
@@ -57,10 +63,16 @@ class FlushJob {
     Status run(FileMetaData *out);
 
   private:
-    const Options &options_;
+    Env *env_;
     std::string dbname_;
     uint64_t table_number_;
     const MemTable &memtable_;
+    Comparator comparator_;
+    Compressor compressor_;
+    int compression_level_;
+    size_t block_size_;
+    size_t max_key_size_;
+    Filter filter_;
 };
 
 } // namespace ANCHORDB_NAMESPACE

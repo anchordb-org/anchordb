@@ -15,8 +15,9 @@
 #pragma once
 
 #include "anchordb/anchordb_namespace.h"
+#include "anchordb/comparator.h"
 #include "anchordb/compressor.h"
-#include "anchordb/options.h"
+#include "anchordb/filter.h"
 #include "anchordb/status.h"
 #include "db/db_format.h"
 #include "file/file_meta.h"
@@ -32,6 +33,7 @@
 
 namespace ANCHORDB_NAMESPACE {
 
+class Env;
 class WritableFileWriter;
 
 // Orchestrates the four files that make up one SSTable:
@@ -53,7 +55,7 @@ class WritableFileWriter;
 // writes that record-level handle into the index slot and never into the data
 // file; readers resolve the complete vLog record through the index.
 //
-// The builder owns the output files it opens through Options::env and writes
+// The builder owns the output files it opens through `env` and writes
 // them under the names in `files`.  finish() flushes and syncs -Data.adb and
 // -Index.adb, writes -Summary.adb and (when enabled) -Filter.adb, and closes every
 // file.  Atomic publication (writing temporary names and renaming them into
@@ -66,14 +68,15 @@ class WritableFileWriter;
 class TableBuilder {
   public:
     // Opens -Data.adb and -Index.adb under `files` and validates that the
-    // required file names are present.  `options.comparator`, compressor,
-    // compression level, filter, block size and max key size drive the table
-    // format.  A null comparator falls back to bytewise ordering; a null
+    // required file names are present.  `comparator`, `compressor`,
+    // `compression_level`, `filter`, `block_size` and `max_key_size` drive the
+    // table format.  A null comparator falls back to bytewise ordering; a null
     // compressor stores index blocks verbatim; a null filter disables
     // -Filter.adb.  Check status() after construction; a failed open leaves the
-    // builder unusable.
-    TableBuilder(const Options &options, const TableFileSet &files,
-                 const size_t writable_file_buf_size = kWritableFileBufSize);
+    // builder unusable.  The DB/orchestrator layer derives these from Options.
+    TableBuilder(Env *env, const TableFileSet &files, const Comparator &comparator, const Compressor &compressor,
+                 int compression_level, size_t block_size, size_t max_key_size, const Filter &filter,
+                 size_t writable_file_buf_size = kWritableFileBufSize);
 
     ~TableBuilder();
 

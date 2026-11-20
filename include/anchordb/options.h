@@ -111,6 +111,8 @@ struct ANCHORDB_EXPORT Options {
     size_t max_key_size = 4 * 1024;
     // Approximate maximum size of a table file before the table is split.
     size_t max_file_size = 2 * 1024 * 1024;
+    // Number of LSM levels.  Must be at least 1.
+    size_t num_levels = 7;
     // Maximum size in bytes of the MANIFEST before it is rewritten as a fresh
     // snapshot.  Zero disables automatic MANIFEST rotation.
     size_t manifest_max_file_size = 4 * 1024 * 1024;

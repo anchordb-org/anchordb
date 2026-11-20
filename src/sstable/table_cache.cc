@@ -25,12 +25,12 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-TableCache::TableCache(const Options &options, std::string db_dir)
-    : options_(options), db_dir_(std::move(db_dir)),
-      vlog_cache_(new VLogReaderCache(options_.env, options_.vlog_reader_cache_size, options_.vlog_reader_cache_type,
-                                      options_.active_map)),
-      cache_(new_cache(options_.table_cache_type, options_.table_cache_size, options_.active_map)),
-      namespace_id_(cache_.new_id()) {}
+TableCache::TableCache(Env *env, std::string db_dir, const Comparator &comparator, const Compressor &compressor,
+                       const Filter &filter, size_t table_cache_size, CacheType table_cache_type,
+                       size_t vlog_reader_cache_size, CacheType vlog_reader_cache_type, MapType map_type)
+    : env_(env), comparator_(comparator), compressor_(compressor), filter_(filter), db_dir_(std::move(db_dir)),
+      vlog_cache_(new VLogReaderCache(env, vlog_reader_cache_size, vlog_reader_cache_type, map_type)),
+      cache_(new_cache(table_cache_type, table_cache_size, map_type)), namespace_id_(cache_.new_id()) {}
 
 TableCache::~TableCache() {
     if (vlog_cache_ != nullptr) { vlog_cache_->unref(); }
@@ -54,7 +54,8 @@ Status TableCache::find_table(uint64_t table_number, CachePin<TableReader> *pin,
 
     const std::string key = cache_key(table_number);
     auto open = [this, table_number](TableReader **out) {
-        return TableReader::open(options_, make_table_file_set(db_dir_, table_number), db_dir_, vlog_cache_, out);
+        return TableReader::open(env_, comparator_, compressor_, filter_, make_table_file_set(db_dir_, table_number),
+                                 db_dir_, vlog_cache_, out);
     };
     auto charge = [](TableReader *opened) { return opened->cache_charge(); };
 

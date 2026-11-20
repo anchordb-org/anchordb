@@ -15,6 +15,9 @@
 #pragma once
 
 #include "anchordb/anchordb_namespace.h"
+#include "anchordb/comparator.h"
+#include "anchordb/compressor.h"
+#include "anchordb/filter.h"
 #include "anchordb/options.h"
 #include "anchordb/status.h"
 #include "cache/cache_wrapper.h"
@@ -30,21 +33,24 @@ namespace ANCHORDB_NAMESPACE {
 
 // Caches open TableReaders so repeated reads of the same table number avoid
 // re-opening files and re-parsing the summary.  The backing Cache is chosen by
-// Options::table_cache_type/size and owned through a CacheWrapper.
+// `table_cache_type`/`table_cache_size` and owned through a CacheWrapper.
 //
 // The cache also owns the VLogReaderCache shared by every TableReader it
 // opens, so all tables resolve a given vLog file through one open reader.
 //
-// Captured Options are forwarded unchanged to TableReader::open, so cached
-// readers use the same comparator, compressor and filter the writer used.  The
-// resident summary and filter are charged to the cache; index blocks are read
-// and decompressed per lookup.
+// `comparator`, `compressor` and `filter` are forwarded unchanged to
+// TableReader::open, so cached readers use the same ordering and codecs the
+// writer used.  The DB/orchestrator layer derives these (and the cache
+// sizes/policies) from Options.  The resident summary and filter are charged to
+// the cache; index blocks are read and decompressed per lookup.
 //
 // A cached TableReader is kept alive while a CachePin on it is outstanding, so
 // the cache may evict and delete it once the pin is released.
 class TableCache {
   public:
-    TableCache(const Options &options, std::string db_dir);
+    TableCache(Env *env, std::string db_dir, const Comparator &comparator, const Compressor &compressor,
+               const Filter &filter, size_t table_cache_size, CacheType table_cache_type, size_t vlog_reader_cache_size,
+               CacheType vlog_reader_cache_type, MapType map_type);
     ~TableCache();
 
     TableCache(const TableCache &) = delete;
@@ -77,7 +83,10 @@ class TableCache {
     // Cache deleter for a TableReader* cache value.
     static void delete_entry(std::string_view key, void *value);
 
-    Options options_;
+    Env *env_;
+    Comparator comparator_;
+    Compressor compressor_;
+    Filter filter_;
     std::string db_dir_;
     // Shared by every TableReader this cache opens.  TableReaders hold their
     // own references, so the cache outlives iterators that outlive this

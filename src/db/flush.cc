@@ -24,15 +24,20 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-FlushJob::FlushJob(const Options &options, std::string dbname, uint64_t table_number, const MemTable &memtable)
-    : options_(options), dbname_(std::move(dbname)), table_number_(table_number), memtable_(memtable) {}
+FlushJob::FlushJob(Env *env, std::string dbname, uint64_t table_number, const MemTable &memtable,
+                   const Comparator &comparator, const Compressor &compressor, int compression_level, size_t block_size,
+                   size_t max_key_size, const Filter &filter)
+    : env_(env), dbname_(std::move(dbname)), table_number_(table_number), memtable_(memtable), comparator_(comparator),
+      compressor_(compressor), compression_level_(compression_level), block_size_(block_size),
+      max_key_size_(max_key_size), filter_(filter) {}
 
 Status FlushJob::run(FileMetaData *out) {
     if (out == nullptr) { return Status::invalid_argument("flush job: null metadata"); }
     *out = FileMetaData();
 
     const TableFileSet files = make_table_file_set(dbname_, table_number_);
-    TableBuilder builder(options_, files);
+    TableBuilder builder(env_, files, comparator_, compressor_, compression_level_, block_size_, max_key_size_,
+                         filter_);
     if (!builder.status().is_ok()) { return builder.status(); }
 
     // Any early return leaves the builder unfinished, so its destructor calls

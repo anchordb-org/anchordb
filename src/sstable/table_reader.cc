@@ -87,17 +87,18 @@ size_t TableReader::cache_charge() const {
     return summary_buffer_.size() + filter_buffer_.size() + kTableCacheEntryOverhead;
 }
 
-Status TableReader::open(const Options &options, const TableFileSet &files, std::string db_dir,
-                         VLogReaderCache *vlog_cache, TableReader **result) {
+Status TableReader::open(Env *env, const Comparator &comparator, const Compressor &compressor, const Filter &filter,
+                         const TableFileSet &files, std::string db_dir, VLogReaderCache *vlog_cache,
+                         TableReader **result) {
     if (result == nullptr) { return Status::invalid_argument("TableReader::open: null result"); }
-    if (options.env == nullptr) { return Status::invalid_argument("TableReader::open: options.env is null"); }
+    if (env == nullptr) { return Status::invalid_argument("TableReader::open: env is null"); }
 
     TableReader *reader = new TableReader();
-    reader->env_ = options.env;
-    reader->comparator_ = options.comparator;
+    reader->env_ = env;
+    reader->comparator_ = comparator;
     if (reader->comparator_.compare == nullptr) { reader->comparator_ = new_byte_wise_comparator(); }
-    reader->compressor_ = options.compressor;
-    reader->filter_spec_ = options.filter;
+    reader->compressor_ = compressor;
+    reader->filter_spec_ = filter;
     reader->db_dir_ = std::move(db_dir);
     reader->vlog_cache_ = vlog_cache;
     if (reader->vlog_cache_ != nullptr) { reader->vlog_cache_->ref(); }

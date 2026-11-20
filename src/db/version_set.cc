@@ -14,6 +14,7 @@
 
 #include "db/version_set.h"
 
+#include "anchordb/env.h"
 #include "db/manifest.h"
 #include "file/filename.h"
 #include <algorithm>
@@ -34,9 +35,10 @@ int byte_wise_compare(std::string_view a, std::string_view b) { return a.compare
 
 } // namespace
 
-VersionSet::VersionSet(const Options &options, std::string dbname, size_t num_levels)
-    : env_(options.env), comparator_(options.comparator), dbname_(std::move(dbname)), num_levels_(num_levels),
-      manifest_max_bytes_(options.manifest_max_file_size) {
+VersionSet::VersionSet(Env *env, const Comparator &comparator, std::string dbname, size_t num_levels,
+                       uint64_t manifest_max_bytes)
+    : env_(env), comparator_(comparator), dbname_(std::move(dbname)), num_levels_(num_levels),
+      manifest_max_bytes_(manifest_max_bytes) {
     current_ = create_version(std::vector<std::vector<FileMetaData>>(num_levels_));
     link_version(current_);
     add_pins(current_);

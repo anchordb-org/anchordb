@@ -74,6 +74,8 @@
 //     Status get_file_size(const std::string &filename, uint64_t *size)
 //     override; Status rename_file(const std::string &from, const std::string
 //     &to) override;
+//     Status truncate_file(const std::string &filename, uint64_t size)
+//     override;
 
 //     Status lock_file(const std::string &filename, FileLock **lock) override;
 //     Status unlock_file(FileLock *win_file_lock) override;

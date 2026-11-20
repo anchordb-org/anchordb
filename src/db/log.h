@@ -187,7 +187,11 @@ class LogReader {
     // True once position() has reached the file size.
     bool done() const { return pos_ >= size_; }
 
-    // Absolute file offset of the next record.
+    // Absolute file offset of the next record.  Advancing only happens after a
+    // record is fully read, so after a failed next() this is the offset at
+    // which the failed record starts, i.e. the end of the last complete record.
+    // Crash recovery uses it as the safe truncation boundary before appending
+    // again.
     size_t position() const { return pos_; }
     size_t size() const { return size_; }
 

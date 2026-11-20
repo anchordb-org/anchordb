@@ -29,14 +29,10 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-class ManifestWriter;
-class WritableFileWriter;
+class ManifestFile;
 
 // Number of levels used when the caller does not choose a different width.
 inline constexpr size_t kDefaultNumLevels = 7;
-
-// Rewrite the MANIFEST as a fresh snapshot once it grows beyond this size.
-inline constexpr uint64_t kDefaultManifestMaxBytes = 4u << 20; // 4 MiB
 
 // Owns the durable version metadata, the current immutable Version, and the
 // live-file bookkeeping that flush/compaction/vLog GC depend on.
@@ -52,9 +48,10 @@ inline constexpr uint64_t kDefaultManifestMaxBytes = 4u << 20; // 4 MiB
 //
 // recover() reads CURRENT, replays every VersionEdit in that MANIFEST through
 // ManifestReader, and rebuilds the state above.  A cleanly terminated MANIFEST
-// is reopened for appending; a torn tail (the crash case) cannot be truncated
-// through the write-only file interface, so recovery writes a fresh MANIFEST
-// snapshot and atomically repoints CURRENT instead.
+// is reopened for appending; a torn tail (the crash case) is truncated in place
+// to the last complete record and then reopened for appending.  If the Env
+// cannot truncate, recovery instead writes a fresh MANIFEST snapshot and
+// atomically repoints CURRENT.
 //
 // log_and_apply() appends one VersionEdit record, syncs it, then installs a new
 // immutable Version.  The old Version is unref'd, not mutated, so any reader
@@ -67,11 +64,11 @@ inline constexpr uint64_t kDefaultManifestMaxBytes = 4u << 20; // 4 MiB
 // DB-level lock when they can race with an install.
 class VersionSet {
   public:
-    // `options.env`, `options.comparator` and `dbname` are captured at
-    // construction; the Env is borrowed and must outlive this object.  A
-    // `manifest_max_bytes` of 0 disables automatic MANIFEST rotation.
-    VersionSet(const Options &options, std::string dbname, size_t num_levels = kDefaultNumLevels,
-               uint64_t manifest_max_bytes = kDefaultManifestMaxBytes);
+    // `options.env`, `options.comparator`, `options.manifest_max_file_size`
+    // and `dbname` are captured at construction; the Env is borrowed and must
+    // outlive this object.  A `manifest_max_file_size` of 0 disables automatic
+    // MANIFEST rotation.
+    VersionSet(const Options &options, std::string dbname, size_t num_levels = kDefaultNumLevels);
 
     VersionSet(const VersionSet &) = delete;
     VersionSet &operator=(const VersionSet &) = delete;
@@ -82,14 +79,15 @@ class VersionSet {
     // edits.  Returns NotFound when CURRENT does not exist (a new database);
     // corruption when CURRENT names something other than a MANIFEST or the
     // MANIFEST header/body is invalid.  A truncated final record is treated as
-    // an incomplete crash write: that tail is dropped and a new MANIFEST is
-    // written from the recovered state.
+    // an incomplete crash write: the MANIFEST is truncated to the last complete
+    // record (or replaced by a snapshot when the Env cannot truncate) and then
+    // reopened for appending.
     Status recover();
 
     // Creates a fresh MANIFEST containing a full snapshot of the current state
-    // and atomically points CURRENT at it.  Used to create a new database and
-    // to rotate away from a MANIFEST whose tail was truncated or that grew past
-    // the rotation threshold.
+    // and atomically points CURRENT at it.  Used to create a new database, to
+    // rotate a MANIFEST that grew past the rotation threshold, and as the
+    // fallback for recovering a torn tail on an Env without truncate support.
     Status write_snapshot();
 
     // Appends one edit as a MANIFEST record, syncs it, then installs a new
@@ -147,9 +145,7 @@ class VersionSet {
 
     Status read_current(uint64_t *manifest_number);
     Status replay_manifest(uint64_t manifest_number, std::vector<std::vector<FileMetaData>> *levels,
-                           bool *tail_truncated);
-    Status open_manifest_for_append(const std::string &path);
-    Status close_manifest();
+                           bool *tail_truncated, uint64_t *truncate_offset);
 
     Status build_snapshot(VersionEdit *snapshot) const;
     Status write_current(uint64_t manifest_number);
@@ -207,8 +203,7 @@ class VersionSet {
     VlogPosition vlog_tail_;
     std::map<uint32_t, VlogSegmentStat> vlog_segment_stats_;
 
-    WritableFileWriter *manifest_file_ = nullptr;
-    ManifestWriter *manifest_log_ = nullptr;
+    ManifestFile *manifest_ = nullptr;
 
     bool recovered_ = false;
     bool tail_truncated_ = false;

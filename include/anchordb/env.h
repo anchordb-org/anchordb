@@ -86,6 +86,16 @@ class ANCHORDB_EXPORT Env {
     virtual Status get_file_size(const std::string &fname, uint64_t *size) = 0;
     // Renames `src` to `target`, replacing `target` if it exists.
     virtual Status rename_file(const std::string &src, const std::string &target) = 0;
+    // Truncates `fname` to exactly `size` bytes, making the change durable
+    // before returning.  Used by crash recovery to drop a torn record tail left
+    // by an interrupted append; `size` is normally the offset of the last
+    // complete record.  The default reports NotSupported so an Env that cannot
+    // truncate still compiles and lets the caller take a fallback path.
+    virtual Status truncate_file(const std::string &fname, uint64_t size) {
+        (void)fname;
+        (void)size;
+        return Status::not_supported("truncate_file");
+    }
     // Flushes the directory's metadata (for example after a rename) so the
     // change survives a crash.  Environments without directory fsync keep the
     // default no-op implementation.
@@ -229,6 +239,7 @@ class ANCHORDB_EXPORT EnvWrapper : public Env {
     Status remove_dir(const std::string &d) override { return target_->remove_dir(d); }
     Status get_file_size(const std::string &f, uint64_t *s) override { return target_->get_file_size(f, s); }
     Status rename_file(const std::string &s, const std::string &t) override { return target_->rename_file(s, t); }
+    Status truncate_file(const std::string &f, uint64_t size) override { return target_->truncate_file(f, size); }
     Status sync_dir(const std::string &d) override { return target_->sync_dir(d); }
     Status lock_file(const std::string &f, FileLock **l) override { return target_->lock_file(f, l); }
     Status unlock_file(FileLock *l) override { return target_->unlock_file(l); }

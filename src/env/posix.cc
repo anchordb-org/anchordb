@@ -267,6 +267,21 @@ Status PosixEnv::rename_file(const std::string &from, const std::string &to) {
     return Status::ok();
 }
 
+Status PosixEnv::truncate_file(const std::string &filename, uint64_t size) {
+    int fd = ::open(filename.c_str(), O_WRONLY | kOpenBaseFlags);
+    if (fd < 0) { return posix_error(filename, errno); }
+
+    Status s = Status::ok();
+    if (::ftruncate(fd, static_cast<off_t>(size)) != 0) {
+        s = posix_error(filename, errno);
+    } else if (::fsync(fd) != 0) {
+        s = posix_error(filename, errno);
+    }
+
+    if (::close(fd) != 0 && s.is_ok()) { s = posix_error(filename, errno); }
+    return s;
+}
+
 Status PosixEnv::sync_dir(const std::string &dirname) {
     int fd = ::open(dirname.c_str(), O_RDONLY | O_DIRECTORY | kOpenBaseFlags);
     if (fd < 0) { return posix_error(dirname, errno); }

@@ -80,6 +80,7 @@ target_sources(anchordb
         src/db/log.h
         src/db/log.cc
         src/db/manifest.h
+        src/db/manifest.cc
         src/db/version.h
         src/db/version.cc
         src/db/version_edit.h

@@ -32,21 +32,11 @@ constexpr size_t kMaxCurrentFileSize = 4096;
 
 int byte_wise_compare(std::string_view a, std::string_view b) { return a.compare(b); }
 
-// Releases a MANIFEST file that was created but never published.
-void discard_manifest_file(Env *env, WritableFileWriter *file, ManifestWriter *log, const std::string &path) {
-    delete log;
-    if (file != nullptr) {
-        (void)file->close();
-        delete file;
-    }
-    if (env != nullptr) { (void)env->remove_file(path); }
-}
-
 } // namespace
 
-VersionSet::VersionSet(const Options &options, std::string dbname, size_t num_levels, uint64_t manifest_max_bytes)
+VersionSet::VersionSet(const Options &options, std::string dbname, size_t num_levels)
     : env_(options.env), comparator_(options.comparator), dbname_(std::move(dbname)), num_levels_(num_levels),
-      manifest_max_bytes_(manifest_max_bytes) {
+      manifest_max_bytes_(options.manifest_max_file_size) {
     current_ = create_version(std::vector<std::vector<FileMetaData>>(num_levels_));
     link_version(current_);
     add_pins(current_);
@@ -54,8 +44,8 @@ VersionSet::VersionSet(const Options &options, std::string dbname, size_t num_le
 
 VersionSet::~VersionSet() {
     clear_versions();
-    Status ignored = close_manifest();
-    (void)ignored;
+    delete manifest_;
+    manifest_ = nullptr;
 }
 
 Status VersionSet::recover() {
@@ -64,8 +54,8 @@ Status VersionSet::recover() {
     // Start from a clean in-memory image while keeping the configured Env and
     // comparator.
     clear_versions();
-    Status ignored = close_manifest();
-    (void)ignored;
+    delete manifest_;
+    manifest_ = nullptr;
 
     manifest_number_ = 0;
     log_number_ = 0;
@@ -97,7 +87,8 @@ Status VersionSet::recover() {
 
     std::vector<std::vector<FileMetaData>> levels(num_levels_);
     bool truncated = false;
-    s = replay_manifest(manifest_number, &levels, &truncated);
+    uint64_t truncate_offset = 0;
+    s = replay_manifest(manifest_number, &levels, &truncated, &truncate_offset);
     if (!s.is_ok()) { return s; }
 
     if (has_comparator_name_ && comparator_.name() != nullptr && comparator_name_ != comparator_.name()) {
@@ -119,13 +110,17 @@ Status VersionSet::recover() {
 
     tail_truncated_ = truncated;
     if (truncated) {
-        // The write-only file interface has no truncate; recover by writing a
-        // complete snapshot into a new MANIFEST and moving CURRENT.
-        s = write_snapshot();
-    } else {
-        s = open_manifest_for_append(descriptor_filename(dbname_, manifest_number));
+        // Drop the torn tail in place, then append after the last complete
+        // record.  If the Env cannot truncate, fall back to a fresh snapshot.
+        s = env_->truncate_file(descriptor_filename(dbname_, manifest_number), truncate_offset);
+        if (s.is_not_supported()) { return write_snapshot(); }
+        if (!s.is_ok()) { return s; }
     }
+
+    ManifestFile *manifest = nullptr;
+    s = ManifestFile::open_append(env_, descriptor_filename(dbname_, manifest_number), &manifest);
     if (!s.is_ok()) { return s; }
+    manifest_ = manifest;
 
     recovered_ = true;
     return Status::ok();
@@ -137,42 +132,32 @@ Status VersionSet::write_snapshot() {
     const uint64_t number = new_file_number();
     const std::string path = descriptor_filename(dbname_, number);
 
-    WritableFileWriter *file = nullptr;
-    Status s = env_->new_writable_file_writer(path, &file);
+    ManifestFile *manifest = nullptr;
+    Status s = ManifestFile::create(env_, path, &manifest);
     if (!s.is_ok()) { return s; }
-    ManifestWriter *log = new ManifestWriter(file);
 
     VersionEdit snapshot;
     s = build_snapshot(&snapshot);
+    if (s.is_ok()) { s = manifest->append(snapshot); }
+    if (s.is_ok()) { s = manifest->sync(); }
     if (!s.is_ok()) {
-        discard_manifest_file(env_, file, log, path);
-        return s;
-    }
-    s = snapshot.append_to(log);
-    if (!s.is_ok()) {
-        discard_manifest_file(env_, file, log, path);
-        return s;
-    }
-    s = log->sync();
-    if (!s.is_ok()) {
-        discard_manifest_file(env_, file, log, path);
+        delete manifest;
+        (void)env_->remove_file(path);
         return s;
     }
 
     s = write_current(number);
     if (!s.is_ok()) {
-        discard_manifest_file(env_, file, log, path);
+        delete manifest;
+        (void)env_->remove_file(path);
         return s;
     }
 
     // The new MANIFEST is durable and CURRENT points at it.  The old descriptor
-    // is now obsolete; a close failure here cannot invalidate the new state.
+    // is now obsolete; closing it cannot invalidate the new state.
     if (manifest_number_ != 0) { obsolete_files_.insert(descriptor_filename(dbname_, manifest_number_)); }
-    Status old_close = close_manifest();
-    (void)old_close;
-
-    manifest_file_ = file;
-    manifest_log_ = log;
+    delete manifest_;
+    manifest_ = manifest;
     manifest_number_ = number;
     recovered_ = true;
     return Status::ok();
@@ -180,20 +165,20 @@ Status VersionSet::write_snapshot() {
 
 Status VersionSet::log_and_apply(const VersionEdit &edit) {
     if (!status_.is_ok()) { return status_; }
-    if (manifest_log_ == nullptr) { return Status::invalid_argument("version set: MANIFEST is not open"); }
+    if (manifest_ == nullptr) { return Status::invalid_argument("version set: MANIFEST is not open"); }
 
     // Validate before writing so a bad edit never enters the MANIFEST.
     Status s = validate_edit_against(edit, current_->levels());
     if (!s.is_ok()) { return s; }
 
-    s = edit.append_to(manifest_log_);
+    s = manifest_->append(edit);
     if (!s.is_ok()) {
         status_ = s;
         return status_;
     }
 
     // The edit must be durable before it can affect reads.
-    s = manifest_log_->sync();
+    s = manifest_->sync();
     if (!s.is_ok()) {
         status_ = s;
         return status_;
@@ -205,7 +190,7 @@ Status VersionSet::log_and_apply(const VersionEdit &edit) {
         return status_;
     }
 
-    if (manifest_max_bytes_ != 0 && manifest_log_->bytes_written() >= manifest_max_bytes_) {
+    if (manifest_max_bytes_ != 0 && manifest_->bytes_written() >= manifest_max_bytes_) {
         s = write_snapshot();
         if (!s.is_ok()) { status_ = s; }
     }
@@ -287,85 +272,50 @@ Status VersionSet::read_current(uint64_t *manifest_number) {
 }
 
 Status VersionSet::replay_manifest(uint64_t manifest_number, std::vector<std::vector<FileMetaData>> *levels,
-                                   bool *tail_truncated) {
+                                   bool *tail_truncated, uint64_t *truncate_offset) {
     if (levels == nullptr) { return Status::invalid_argument("version set: null replay levels"); }
     if (tail_truncated == nullptr) { return Status::invalid_argument("version set: null tail result"); }
+    if (truncate_offset == nullptr) { return Status::invalid_argument("version set: null truncate result"); }
     *tail_truncated = false;
+    *truncate_offset = 0;
 
     const std::string path = descriptor_filename(dbname_, manifest_number);
-    uint64_t file_size = 0;
-    Status s = env_->get_file_size(path, &file_size);
-    if (!s.is_ok()) { return s; }
-    if (file_size < kManifestFileHeaderSize) {
-        return Status::corruption("version set: MANIFEST is empty or truncated", path);
-    }
-
-    SequentialFileReader *reader = nullptr;
-    s = env_->new_sequential_file_reader(path, &reader);
+    ManifestIterator *iterator = nullptr;
+    Status s = ManifestIterator::open(env_, path, &iterator);
     if (!s.is_ok()) { return s; }
 
     Status result = Status::ok();
-    {
-        ManifestReader log(reader, file_size);
-        while (!log.done()) {
-            VersionEdit edit;
-            s = edit.read_from(&log);
-            if (!s.is_ok()) {
-                // A failure before any record means the header itself is bad.
-                if (log.position() == 0) {
-                    result = s;
-                    break;
-                }
-                // A torn tail is the crash case: drop it and let the caller
-                // rotate.
-                *tail_truncated = true;
+    while (!iterator->done()) {
+        VersionEdit edit;
+        s = iterator->next(&edit);
+        if (!s.is_ok()) {
+            // A failure with no bytes consumed means the header itself is bad.
+            if (iterator->position() == 0) {
+                result = s;
                 break;
             }
+            // A torn tail is the crash case: drop it.  position() is the start
+            // of the record that failed, i.e. the last complete record
+            // boundary, so the caller can truncate there.
+            *tail_truncated = true;
+            *truncate_offset = iterator->position();
+            break;
+        }
 
-            s = validate_edit_against(edit, *levels);
-            if (!s.is_ok()) {
-                result = s;
-                break;
-            }
-            s = apply_edit_fields(edit, levels, false);
-            if (!s.is_ok()) {
-                result = s;
-                break;
-            }
+        s = validate_edit_against(edit, *levels);
+        if (!s.is_ok()) {
+            result = s;
+            break;
+        }
+        s = apply_edit_fields(edit, levels, false);
+        if (!s.is_ok()) {
+            result = s;
+            break;
         }
     }
-    delete reader;
+    delete iterator;
 
     return result;
-}
-
-Status VersionSet::open_manifest_for_append(const std::string &path) {
-    WritableFileWriter *raw_file = nullptr;
-    Status s = env_->new_appendable_file_writer(path, &raw_file);
-    if (!s.is_ok()) { return s; }
-
-    uint64_t file_size = 0;
-    s = env_->get_file_size(path, &file_size);
-    if (!s.is_ok()) {
-        (void)raw_file->close();
-        delete raw_file;
-        return s;
-    }
-
-    manifest_file_ = raw_file;
-    manifest_log_ = new ManifestWriter(raw_file, kLogAppend, file_size);
-    return Status::ok();
-}
-
-Status VersionSet::close_manifest() {
-    delete manifest_log_;
-    manifest_log_ = nullptr;
-    if (manifest_file_ == nullptr) { return Status::ok(); }
-
-    Status s = manifest_file_->close();
-    delete manifest_file_;
-    manifest_file_ = nullptr;
-    return s;
 }
 
 Status VersionSet::build_snapshot(VersionEdit *snapshot) const {

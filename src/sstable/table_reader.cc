@@ -13,8 +13,8 @@
 // limitations under the License.
 
 #include "sstable/table_reader.h"
+#include "anchordb/cache.h"
 #include "anchordb/env.h"
-#include "cache/typed_cache.h"
 #include "db/vlog_reader_cache.h"
 #include "file/filename.h"
 #include "sstable/data_record.h"
@@ -74,7 +74,6 @@ TableReader::~TableReader() {
     delete filter_;
     delete index_reader_;
     delete data_reader_;
-    if (vlog_cache_ != nullptr) { vlog_cache_->unref(); }
 }
 
 void TableReader::unref() {
@@ -101,7 +100,6 @@ Status TableReader::open(Env *env, const Comparator &comparator, const Compresso
     reader->filter_spec_ = filter;
     reader->db_dir_ = std::move(db_dir);
     reader->vlog_cache_ = vlog_cache;
-    if (reader->vlog_cache_ != nullptr) { reader->vlog_cache_->ref(); }
 
     Status s = reader->init_(files);
     if (!s.is_ok()) {
@@ -582,12 +580,13 @@ Status TableReader::read_blob_record_(const ValueHandle &handle, std::string_vie
         return Status::corruption("table reader: vLog record out of range", std::to_string(handle.offset));
     }
 
-    CachePin<RandomAccessFileReader> pin;
+    Cache::PinnedHandle pin;
     s = vlog_cache_->open_reader(filename, &pin);
     if (!s.is_ok()) { return s; }
 
+    auto *reader = static_cast<RandomAccessFileReader *>(pin.value());
     std::string_view view;
-    s = read_exact(pin.get(), handle.offset, handle.size, scratch, &view);
+    s = read_exact(reader, handle.offset, handle.size, scratch, &view);
     if (!s.is_ok()) { return s; }
 
     ParsedDataRecord record;

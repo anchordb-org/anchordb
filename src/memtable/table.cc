@@ -154,6 +154,7 @@ bool MemTable::get(const LookUpKey &key, std::string *value, Status *s) {
 Status MemTable::read_blob_(const BlobHandle &handle, std::string_view expected_key, std::string *value) const {
     if (value == nullptr) { return Status::invalid_argument("memtable: null value"); }
     if (env_ == nullptr) { return Status::not_supported("memtable: no env for blob read"); }
+    if (vlog_reader_cache_ == nullptr) { return Status::not_supported("memtable: no vlog reader cache"); }
     if (handle.size < kDataRecordHeaderSize) {
         return Status::corruption("memtable: vlog record size too small", std::to_string(handle.size));
     }

@@ -92,7 +92,6 @@ target_sources(anchordb
         src/db/vlog_reader_cache.cc
         src/cache/cache.cc
         src/cache/cache_wrapper.h
-        src/cache/typed_cache.h
         src/cache/util.h
         src/cache/lru.h
         src/cache/lru.cc

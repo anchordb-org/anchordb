@@ -113,15 +113,19 @@ class MemtableIterator : public Iterator {
 // appended to the writer's vLog file and the memtable stores a BlobHandle as
 // the entry value.  The caller owns the writer and must keep it alive for the
 // memtable's lifetime.  `env` and `vlog_dbname` are needed to reopen the
-// numbered vLog file by `file_id` when a blob value is read back.
+// numbered vLog file by `file_id` when a blob value is read back;
+// `vlog_reader_cache` is the DB-owned reader cache the memtable borrows for
+// those reads and must outlive it.  It is required; pass nullptr explicitly to
+// disable blob reads.
 class MemTable {
   public:
-    explicit MemTable(Comparator comparator, const uint32_t arena_block_size, size_t max_key_size = kDefaultMaxKeySize,
-                      DataRecordWriter *vlog_writer = nullptr, uint32_t vlog_file_id = 0,
-                      size_t value_threshold = 4 * 1024, Env *env = nullptr, std::string vlog_dbname = std::string())
+    explicit MemTable(Comparator comparator, const uint32_t arena_block_size, VLogReaderCache *vlog_reader_cache,
+                      size_t max_key_size = kDefaultMaxKeySize, DataRecordWriter *vlog_writer = nullptr,
+                      uint32_t vlog_file_id = 0, size_t value_threshold = 4 * 1024, Env *env = nullptr,
+                      std::string vlog_dbname = std::string())
         : comparator_(std::move(comparator)), arena_(arena_block_size), refs_{0}, max_key_size_(max_key_size),
           value_threshold_(value_threshold), vlog_writer_(vlog_writer), vlog_file_id_(vlog_file_id), env_(env),
-          vlog_dbname_(std::move(vlog_dbname)), vlog_reader_cache_(new VLogReaderCache(env)),
+          vlog_dbname_(std::move(vlog_dbname)), vlog_reader_cache_(vlog_reader_cache),
           table_(KeyComparator(comparator_), &arena_) {}
 
     MemTable(const MemTable &) = delete;
@@ -193,10 +197,7 @@ class MemTable {
   private:
     friend class MemtableIterator;
 
-    ~MemTable() {
-        assert(refs_.load(std::memory_order_relaxed) == 0);
-        vlog_reader_cache_->unref();
-    }
+    ~MemTable() { assert(refs_.load(std::memory_order_relaxed) == 0); }
 
     // Reads and decodes the vLog record referenced by `handle`, copies its
     // value into *value and validates the stored key and entry type.
@@ -211,8 +212,8 @@ class MemTable {
     uint32_t vlog_file_id_;
     Env *env_;
     std::string vlog_dbname_;
-    // Open vLog readers, keyed by file name.  Owned through one reference to
-    // the shared, reference-counted cache.  Mutable because blob reads go
+    // Borrowed DB-owned vLog reader cache, keyed by file name.  Must outlive the
+    // memtable; null disables blob reads.  Mutable because blob reads go
     // through a const memtable view.
     mutable VLogReaderCache *vlog_reader_cache_;
     Table table_;

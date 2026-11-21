@@ -26,15 +26,9 @@
 namespace ANCHORDB_NAMESPACE {
 
 TableCache::TableCache(Env *env, std::string db_dir, const Comparator &comparator, const Compressor &compressor,
-                       const Filter &filter, size_t table_cache_size, CacheType table_cache_type,
-                       size_t vlog_reader_cache_size, CacheType vlog_reader_cache_type, MapType map_type)
+                       const Filter &filter, Cache *table_cache, VLogReaderCache *vlog_cache)
     : env_(env), comparator_(comparator), compressor_(compressor), filter_(filter), db_dir_(std::move(db_dir)),
-      vlog_cache_(new VLogReaderCache(env, vlog_reader_cache_size, vlog_reader_cache_type, map_type)),
-      cache_(new_cache(table_cache_type, table_cache_size, map_type)), namespace_id_(cache_.new_id()) {}
-
-TableCache::~TableCache() {
-    if (vlog_cache_ != nullptr) { vlog_cache_->unref(); }
-}
+      vlog_cache_(vlog_cache), cache_(table_cache), namespace_id_(cache_.valid() ? cache_.new_id() : 0) {}
 
 std::string TableCache::cache_key(uint64_t table_number) const {
     std::string key;
@@ -49,8 +43,9 @@ std::string TableCache::cache_key(uint64_t table_number) const {
 
 void TableCache::delete_entry(std::string_view, void *value) { static_cast<TableReader *>(value)->unref(); }
 
-Status TableCache::find_table(uint64_t table_number, CachePin<TableReader> *pin, TableReader **reader) {
+Status TableCache::find_table(uint64_t table_number, Cache::PinnedHandle *pin, TableReader **reader) {
     if (pin == nullptr || reader == nullptr) { return Status::invalid_argument("TableCache::find_table: null output"); }
+    if (!cache_.valid()) { return Status::invalid_argument("TableCache::find_table: no cache"); }
 
     const std::string key = cache_key(table_number);
     auto open = [this, table_number](TableReader **out) {
@@ -64,36 +59,29 @@ Status TableCache::find_table(uint64_t table_number, CachePin<TableReader> *pin,
 
 Status TableCache::get(const ReadOptions &options, uint64_t table_number, std::string_view key, std::string *value,
                        std::string *scratch) {
-    CachePin<TableReader> pin;
+    Cache::PinnedHandle pin;
     TableReader *reader = nullptr;
     Status s = find_table(table_number, &pin, &reader);
     if (!s.is_ok()) { return s; }
 
-    Status result = reader->get(options, key, value, scratch);
-
-    // A valid pin released by its destructor may delete the reader, so this
-    // must be the last use.
-    if (!pin.valid()) { reader->unref(); }
-    return result;
+    return reader->get(options, key, value, scratch);
 }
 
 Status TableCache::new_iterator(const ReadOptions &options, uint64_t table_number, Iterator **iter) {
     if (iter == nullptr) { return Status::invalid_argument("TableCache::new_iterator: null iterator output"); }
 
-    CachePin<TableReader> pin;
+    Cache::PinnedHandle pin;
     TableReader *reader = nullptr;
     Status s = find_table(table_number, &pin, &reader);
     if (!s.is_ok()) { return s; }
 
+    // The iterator holds its own reader reference, so the pin can be dropped.
     *iter = reader->new_iterator(options);
-
-    // The iterator holds its own reader reference, so the cache pin (or the
-    // caller's reference when the cache declined the entry) can be dropped.
-    if (!pin.valid()) { reader->unref(); }
     return Status::ok();
 }
 
 Status TableCache::erase(uint64_t table_number) {
+    if (!cache_.valid()) { return Status::invalid_argument("TableCache::erase: no cache"); }
     cache_.erase(cache_key(table_number));
     return Status::ok();
 }

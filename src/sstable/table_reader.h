@@ -56,10 +56,9 @@ class VLogReaderCache;
 //                  (file_id, offset, size), starting at its header
 //
 // Blob records may reference different vLog files over the life of one table.
-// The reader resolves them through a shared VLogReaderCache borrowed from its
-// owner, so readers for the same vLog file are opened once and reused across
-// tables instead of being owned per table.  The reader takes its own reference
-// to the cache in open().
+// The reader resolves them through a DB-owned VLogReaderCache that it borrows,
+// so readers for the same vLog file are opened once and reused across tables
+// instead of being owned per table.  The cache must outlive the reader.
 //
 // A TableReader owns its table files and is non-copyable.  Its on-disk view is
 // immutable after a successful open(); only the reference count changes
@@ -68,13 +67,13 @@ class TableReader {
   public:
     // Opens `files` and loads the summary and filter.  `db_dir` is the database
     // directory used to build vLog file names; pass an empty string when tables
-    // are opened without a directory prefix.  `vlog_cache` is the shared,
-    // DB-scoped cache used to resolve blob entries; the reader takes its own
-    // reference (null disables blob reads).  `comparator`, `compressor` and
-    // `filter` describe the table format and are supplied by the DB/orchestrator
-    // layer from Options.  On success stores a heap-allocated reader in *result;
-    // the caller owns it.  On failure returns a non-ok Status and leaves *result
-    // untouched.
+    // are opened without a directory prefix.  `vlog_cache` is the DB-owned,
+    // shared cache used to resolve blob entries; the reader borrows it and it
+    // must outlive the reader (null disables blob reads).  `comparator`,
+    // `compressor` and `filter` describe the table format and are supplied by
+    // the DB/orchestrator layer from Options.  On success stores a
+    // heap-allocated reader in *result; the caller owns it.  On failure returns
+    // a non-ok Status and leaves *result untouched.
     static Status open(Env *env, const Comparator &comparator, const Compressor &compressor, const Filter &filter,
                        const TableFileSet &files, std::string db_dir, VLogReaderCache *vlog_cache,
                        TableReader **result);
@@ -161,8 +160,7 @@ class TableReader {
     uint64_t data_file_size_ = 0;
     size_t block_size_ = 0;
 
-    // Shared vLog reader cache.  The reader holds one of its references so the
-    // cache stays alive for iterators that outlive the owner.
+    // Borrowed DB-owned vLog reader cache; must outlive this reader.
     VLogReaderCache *vlog_cache_ = nullptr;
 };
 

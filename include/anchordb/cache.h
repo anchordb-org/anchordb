@@ -31,14 +31,14 @@ namespace ANCHORDB_NAMESPACE {
 // can bound total memory.  Values are opaque to the cache: it never inspects or
 // frees them directly, calling the supplied `deleter` instead.
 //
-// Entry lifetime: insert()/lookup() return a Handle that pins the entry.  The
-// caller must pass that handle to release() once done.  An entry is only
-// reclaimed by the cache (or by erase()) after every outstanding handle has
-// been released.
+// Entry lifetime: insert()/lookup() return a PinnedHandle that owns the entry
+// for its scope.  An entry is only reclaimed by the cache (or by erase()) after
+// every outstanding PinnedHandle has been destroyed, so callers never call
+// release() themselves.
 //
 // Thread-safety: implementations are internally synchronized; a single Cache
-// may be shared across threads.  A given Handle, however, is not thread-safe
-// and must be released on the same Cache it came from.
+// may be shared across threads.  A given PinnedHandle, however, is not
+// thread-safe and must be destroyed on the same Cache it came from.
 //
 // Obtain an instance via new_lru_cache(), new_lirs_cache() or
 // new_clock_pro_cache().
@@ -55,31 +55,50 @@ class ANCHORDB_EXPORT Cache {
     // it as an opaque pointer; its layout is private to the implementation.
     struct Handle {};
 
+    // Owning, move-only view of one cache entry.  The entry stays resident
+    // until every PinnedHandle on it is destroyed; the destructor releases the
+    // entry through the cache, so clients never call release().  An empty
+    // handle means the lookup missed.
+    class PinnedHandle {
+      public:
+        PinnedHandle() = default;
+        PinnedHandle(PinnedHandle &&other) noexcept;
+        PinnedHandle &operator=(PinnedHandle &&other) noexcept;
+        ~PinnedHandle();
+
+        PinnedHandle(const PinnedHandle &) = delete;
+        PinnedHandle &operator=(const PinnedHandle &) = delete;
+
+        // The pinned value, or nullptr when empty.
+        void *value() const;
+        explicit operator bool() const { return handle_ != nullptr; }
+
+        // Releases the entry.  Safe to call on an empty handle.
+        void reset();
+
+      private:
+        friend class Cache;
+        PinnedHandle(Cache *cache, Handle *handle);
+
+        Cache *cache_ = nullptr;
+        Handle *handle_ = nullptr;
+    };
+
     // Inserts the mapping key -> value, charging `charge` against the cache's
-    // capacity, and returns a handle the caller must later release().
+    // capacity, and returns a handle pinning the entry.
     //
     // If an entry for `key` already exists it is replaced.  `deleter` is
     // invoked with the key and value when the entry is finally evicted, erased
     // or destroyed; it is responsible for freeing `value`.
-    virtual Handle *insert(std::string_view key, void *value, size_t charge,
-                           void (*deleter)(std::string_view key, void *value)) = 0;
+    virtual PinnedHandle insert(std::string_view key, void *value, size_t charge,
+                                void (*deleter)(std::string_view key, void *value)) = 0;
 
-    // Returns a handle for the cached mapping of `key`, or nullptr on a miss.
-    // The caller must release() the returned handle when it is no longer
-    // needed.
-    virtual Handle *lookup(std::string_view key) = 0;
-
-    // Releases a handle previously returned by insert() or lookup().  The entry
-    // becomes reclaimable once its last handle is released.
-    // REQUIRES: `handle` has not already been released.
-    virtual void release(Handle *handle) = 0;
-
-    // Returns the value stored for a handle returned by insert()/lookup().
-    // REQUIRES: `handle` has not already been released.
-    virtual void *value(Handle *handle) = 0;
+    // Returns a handle pinning the cached mapping of `key`, or an empty handle
+    // on a miss.
+    virtual PinnedHandle lookup(std::string_view key) = 0;
 
     // Removes the mapping for `key`, if present.  The entry itself is kept
-    // alive until every outstanding handle to it has been released.
+    // alive until every outstanding PinnedHandle to it has been destroyed.
     virtual void erase(std::string_view key) = 0;
 
     // Returns a fresh numeric id, unique within this cache instance.  Clients
@@ -94,7 +113,47 @@ class ANCHORDB_EXPORT Cache {
     // Returns the combined charge of all entries currently resident in the
     // cache.
     virtual size_t total_charge() const = 0;
+
+  protected:
+    // Wraps a raw handle produced by an implementation's shard in an owning
+    // PinnedHandle.  Implementations call this from insert()/lookup().
+    PinnedHandle make_pinned(Handle *handle) { return PinnedHandle(this, handle); }
+
+  private:
+    // Invoked by PinnedHandle.  Not part of the public interface: releasing the
+    // last handle makes the entry reclaimable, and clients reach this only
+    // through the handle's destructor/reset().
+    virtual void release_(Handle *handle) = 0;
+    virtual void *value_(Handle *handle) = 0;
 };
+
+inline Cache::PinnedHandle::PinnedHandle(Cache *cache, Handle *handle) : cache_(cache), handle_(handle) {}
+
+inline Cache::PinnedHandle::PinnedHandle(PinnedHandle &&other) noexcept : cache_(other.cache_), handle_(other.handle_) {
+    other.cache_ = nullptr;
+    other.handle_ = nullptr;
+}
+
+inline Cache::PinnedHandle &Cache::PinnedHandle::operator=(PinnedHandle &&other) noexcept {
+    if (this != &other) {
+        reset();
+        cache_ = other.cache_;
+        handle_ = other.handle_;
+        other.cache_ = nullptr;
+        other.handle_ = nullptr;
+    }
+    return *this;
+}
+
+inline Cache::PinnedHandle::~PinnedHandle() { reset(); }
+
+inline void *Cache::PinnedHandle::value() const { return handle_ != nullptr ? cache_->value_(handle_) : nullptr; }
+
+inline void Cache::PinnedHandle::reset() {
+    if (handle_ != nullptr) { cache_->release_(handle_); }
+    cache_ = nullptr;
+    handle_ = nullptr;
+}
 
 // Creates a cache using the replacement policy selected by `type`.  `capacity`
 // bounds the sum of entry charges; `t` selects the hash-map backend used for

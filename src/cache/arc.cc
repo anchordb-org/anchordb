@@ -71,13 +71,34 @@ Cache::Handle *ARCCache::insert(std::string_view key, uint64_t hash, void *value
     mutex_.lock();
     HashedKey hkey{key, hash};
 
+    // A zero-capacity cache stores nothing.  Hand back an uncached node that
+    // the caller's release() frees, matching LRU's capacity-0 behavior.
+    if (capacity_ == 0) {
+        ARCHandle *uncached = reinterpret_cast<ARCHandle *>(malloc(sizeof(ARCHandle) - 1 + key.size()));
+        uncached->value = value;
+        uncached->deleter = deleter;
+        uncached->charge = charge;
+        uncached->hash = hash;
+        uncached->in_cache = false;
+        uncached->state = ARCHandle::State::kT1;
+        uncached->key_len = key.size();
+        uncached->refs = 1; // only the returned handle
+        std::memcpy(uncached->key_data, key.data(), key.size());
+        mutex_.unlock();
+        return reinterpret_cast<Cache::Handle *>(uncached);
+    }
+
     ARCHandle *e = std::visit([&](auto &active_map) { return active_map.get(hkey); }, map_);
 
     if (e != nullptr && e->in_cache) {
-        // Cache Hit: Key already present in T1 or T2
+        // Cache Hit: Key already present in T1 or T2.  Release the value being
+        // replaced just as the other backends do.
+        if (e->deleter != nullptr && e->value != nullptr) { (*e->deleter)(e->key(), e->value); }
+        usage_ -= e->charge;
         e->value = value;
         e->charge = charge;
         e->deleter = deleter;
+        usage_ += charge;
         ref(e);
         mutex_.unlock();
         return reinterpret_cast<Cache::Handle *>(e);
@@ -111,11 +132,13 @@ Cache::Handle *ARCCache::insert(std::string_view key, uint64_t hash, void *value
             remove_ghost_(e);
         }
 
-        // Promoted directly to T2 upon ghost hit
+        // Promoted directly to T2 upon ghost hit.  Key the lists/map by the
+        // handle's own copied key, not the caller's transient view.
         handle->state = ARCHandle::State::kT2;
-        t2_in_use_.push_front(hkey, handle);
+        HashedKey handle_key{handle->key(), handle->hash};
+        t2_in_use_.push_front(handle_key, handle);
         usage_ += charge;
-        std::visit([&](auto &active_map) { active_map.insert(hkey, handle); }, map_);
+        std::visit([&](auto &active_map) { active_map.insert(handle_key, handle); }, map_);
 
     } else {
         // Complete Cache Miss
@@ -146,11 +169,13 @@ Cache::Handle *ARCCache::insert(std::string_view key, uint64_t hash, void *value
             replace(hkey, false);
         }
 
-        // New item starts in T1
+        // New item starts in T1.  Use the handle's copied key so the map/list
+        // entries do not alias the caller's transient string_view.
         handle->state = ARCHandle::State::kT1;
-        t1_in_use_.push_front(hkey, handle);
+        HashedKey handle_key{handle->key(), handle->hash};
+        t1_in_use_.push_front(handle_key, handle);
         usage_ += charge;
-        std::visit([&](auto &active_map) { active_map.insert(hkey, handle); }, map_);
+        std::visit([&](auto &active_map) { active_map.insert(handle_key, handle); }, map_);
     }
 
     mutex_.unlock();

@@ -105,7 +105,10 @@ template <typename T> T LinearProbingMap<T>::get(HashedKey key) const {
 }
 
 template <typename T> void LinearProbingMap<T>::insert(HashedKey key, T value) {
-    if (size_ >= capacity_ * kMaxLoadFactor) { resize_(capacity_ * 2); }
+    // get()/contains() probe until an empty bucket, so reserve room for the new
+    // entry and keep at least one empty slot.  Testing size_ (not size_ + 1)
+    // allowed a one-slot table to become completely full.
+    if (size_ + 1 > static_cast<size_t>(capacity_ * kMaxLoadFactor)) { resize_(capacity_ * 2); }
 
     size_t idx = mask_(key.hash);
 

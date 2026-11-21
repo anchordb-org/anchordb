@@ -15,9 +15,11 @@
 #pragma once
 
 #include "anchordb/cache.h"
+#include "anchordb/status.h"
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
+#include <utility>
 
 #include "anchordb/anchordb_namespace.h"
 
@@ -47,19 +49,12 @@ class CacheWrapper {
 
     bool valid() const { return cache_ != nullptr; }
 
-    // The wrapped Cache, for helpers that construct typed pins around it.
-    Cache *raw() const { return cache_; }
-
-    Cache::Handle *insert(std::string_view key, void *value, size_t charge,
-                          void (*deleter)(std::string_view key, void *value)) {
+    Cache::PinnedHandle insert(std::string_view key, void *value, size_t charge,
+                               void (*deleter)(std::string_view key, void *value)) {
         return cache_->insert(key, value, charge, deleter);
     }
 
-    Cache::Handle *lookup(std::string_view key) { return cache_->lookup(key); }
-
-    void release(Cache::Handle *handle) { cache_->release(handle); }
-
-    void *value(Cache::Handle *handle) { return cache_->value(handle); }
+    Cache::PinnedHandle lookup(std::string_view key) { return cache_->lookup(key); }
 
     void erase(std::string_view key) { cache_->erase(key); }
 
@@ -72,5 +67,40 @@ class CacheWrapper {
   private:
     Cache *cache_;
 };
+
+// Looks up `key` in `cache`; on a miss calls `open(&value)`, charges
+// `charge(value)`, and inserts the result.
+//
+// On success `*pin` owns the entry and `*value`, when non-null, points at its
+// value.  The caller supplies the deleter used by the cache (and as a defensive
+// fallback should an implementation ever decline an insertion).
+template <typename V, typename OpenFn, typename ChargeFn>
+Status cache_lookup_or_open(CacheWrapper &cache, std::string_view key, Cache::PinnedHandle *pin, V **value,
+                            OpenFn &&open, ChargeFn &&charge, void (*deleter)(std::string_view, void *)) {
+    if (pin == nullptr) { return Status::invalid_argument("cache_lookup_or_open: null pin"); }
+
+    pin->reset();
+    if (value != nullptr) { *value = nullptr; }
+
+    if (Cache::PinnedHandle hit = cache.lookup(key)) {
+        *pin = std::move(hit);
+        if (value != nullptr) { *value = static_cast<V *>(pin->value()); }
+        return Status::ok();
+    }
+
+    V *opened = nullptr;
+    Status s = open(&opened);
+    if (!s.is_ok()) { return s; }
+    if (opened == nullptr) { return Status::corruption("cache_lookup_or_open: opener returned null"); }
+
+    *pin = cache.insert(key, opened, charge(opened), deleter);
+    if (!*pin) {
+        // The cache declined ownership, so free the opened value ourselves.
+        deleter(key, opened);
+        return Status::io_error("cache_lookup_or_open: insert declined");
+    }
+    if (value != nullptr) { *value = static_cast<V *>(pin->value()); }
+    return Status::ok();
+}
 
 } // namespace ANCHORDB_NAMESPACE

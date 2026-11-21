@@ -18,8 +18,6 @@
 #include "anchordb/options.h"
 #include "anchordb/status.h"
 #include "cache/cache_wrapper.h"
-#include "cache/typed_cache.h"
-#include <atomic>
 #include <cstddef>
 #include <string_view>
 
@@ -40,30 +38,25 @@ inline constexpr size_t kDefaultVLogReaderCacheSize = 8 * 1024 * 1024;
 // repeated blob reads reuse the descriptor and reader state instead of opening
 // the file again.
 //
-// The backing Cache is owned through a CacheWrapper; the replacement policy and
-// hash-map backend are selected the same way as the table cache.  A reader is
-// kept alive while a returned pin is outstanding and is deleted through the
-// cache deleter once the last pin is released.
+// The backing Cache is injected and owned through a CacheWrapper.  Pass any
+// Cache implementation (a built-in policy from new_cache(...) or a custom
+// subclass of Cache) to plug in a replacement policy; this is the extension
+// point for open-world use.  A reader is kept alive while a returned pin is
+// outstanding and is deleted through the cache deleter once the last pin is
+// released.
 //
-// Manually reference-counted: the owner constructs the cache with `new` and
-// holds one reference; every TableReader that resolves blobs through it holds
-// another until it is destroyed.  unref() deletes the cache at zero.
+// Ownership: not reference counted.  The DB layer owns one instance and lends
+// it to the table cache and memtables; the owner must outlive every borrower.
 //
 // Not copyable.  The wrapper is internally synchronized by the Cache, but a
-// single Cache::Handle must be released on the cache it came from.
+// single PinnedHandle must be released on the cache it came from.
 class VLogReaderCache {
   public:
-    explicit VLogReaderCache(Env *env, size_t capacity = kDefaultVLogReaderCacheSize,
-                             CacheType cache_type = CacheType::LRU, MapType map_type = MapType::Swiss);
+    // Takes ownership of `cache`; `cache` must be non-null until destruction.
+    VLogReaderCache(Env *env, Cache *cache);
 
     VLogReaderCache(const VLogReaderCache &) = delete;
     VLogReaderCache &operator=(const VLogReaderCache &) = delete;
-
-    // Takes an additional reference to this cache.
-    void ref() { refs_.fetch_add(1, std::memory_order_relaxed); }
-
-    // Drops a reference, deleting the cache when the count reaches zero.
-    void unref();
 
     // Reads `n` bytes at `offset` from `filename`, reusing a cached reader when
     // one is already open and opening/caching it on a miss.  `*result` points
@@ -72,13 +65,13 @@ class VLogReaderCache {
 
     // Returns a pinned open reader for `filename`, opening and caching it on a
     // miss.  The pin keeps the reader alive and must outlive every use of it.
-    Status open_reader(std::string_view filename, CachePin<RandomAccessFileReader> *pin);
+    Status open_reader(std::string_view filename, Cache::PinnedHandle *pin);
 
     // Removes `filename` from the cache.  The reader stays alive until any
     // outstanding read finishes.
     void erase(std::string_view filename);
 
-    size_t total_charge() const { return cache_.total_charge(); }
+    size_t total_charge() const { return cache_.valid() ? cache_.total_charge() : 0; }
 
   private:
     // Cache deleter for a RandomAccessFileReader* value.
@@ -86,7 +79,6 @@ class VLogReaderCache {
 
     Env *env_;
     CacheWrapper cache_;
-    std::atomic<int> refs_{1};
 };
 
 } // namespace ANCHORDB_NAMESPACE

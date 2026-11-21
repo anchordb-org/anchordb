@@ -120,18 +120,18 @@ class ShardedLRUCache : public Cache {
 
     ~ShardedLRUCache() override {};
 
-    Handle *insert(std::string_view key, void *value, size_t charge,
-                   void (*deleter)(std::string_view key, void *value)) override {
+    PinnedHandle insert(std::string_view key, void *value, size_t charge,
+                        void (*deleter)(std::string_view key, void *value)) override {
         const uint64_t hash = hash_slice(key);
-        return shard_[shard(hash)].insert(key, hash, value, charge, deleter);
+        return make_pinned(shard_[shard(hash)].insert(key, hash, value, charge, deleter));
     }
 
-    Handle *lookup(std::string_view key) override {
+    PinnedHandle lookup(std::string_view key) override {
         const uint64_t hash = hash_slice(key);
-        return shard_[shard(hash)].lookup(key, hash);
+        return make_pinned(shard_[shard(hash)].lookup(key, hash));
     }
 
-    void release(Handle *handle) override {
+    void release_(Handle *handle) override {
         LRUHandle *h = reinterpret_cast<LRUHandle *>(handle);
         shard_[shard(h->hash)].release(handle);
     }
@@ -141,7 +141,7 @@ class ShardedLRUCache : public Cache {
         shard_[shard(hash)].erase(key, hash);
     }
 
-    void *value(Handle *handle) override { return reinterpret_cast<LRUHandle *>(handle)->value; }
+    void *value_(Handle *handle) override { return reinterpret_cast<LRUHandle *>(handle)->value; }
 
     uint64_t new_id() override {
         id_mutex_.lock();

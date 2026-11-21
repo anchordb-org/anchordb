@@ -21,7 +21,6 @@
 #include "anchordb/options.h"
 #include "anchordb/status.h"
 #include "cache/cache_wrapper.h"
-#include "cache/typed_cache.h"
 #include "db/vlog_reader_cache.h"
 #include "sstable/table_reader.h"
 #include <cstddef>
@@ -32,11 +31,15 @@
 namespace ANCHORDB_NAMESPACE {
 
 // Caches open TableReaders so repeated reads of the same table number avoid
-// re-opening files and re-parsing the summary.  The backing Cache is chosen by
-// `table_cache_type`/`table_cache_size` and owned through a CacheWrapper.
+// re-opening files and re-parsing the summary.  The backing Cache is injected
+// and owned through a CacheWrapper: pass any Cache implementation (a built-in
+// policy from new_cache(...) or a custom subclass) to plug in a replacement
+// policy.
 //
-// The cache also owns the VLogReaderCache shared by every TableReader it
-// opens, so all tables resolve a given vLog file through one open reader.
+// `vlog_cache` is borrowed from the DB layer, which owns it; it must outlive
+// this TableCache and every reader opened through it.  Every TableReader this
+// cache opens resolves vLog files through it, so all tables share one set of
+// open descriptors.
 //
 // `comparator`, `compressor` and `filter` are forwarded unchanged to
 // TableReader::open, so cached readers use the same ordering and codecs the
@@ -44,14 +47,13 @@ namespace ANCHORDB_NAMESPACE {
 // sizes/policies) from Options.  The resident summary and filter are charged to
 // the cache; index blocks are read and decompressed per lookup.
 //
-// A cached TableReader is kept alive while a CachePin on it is outstanding, so
-// the cache may evict and delete it once the pin is released.
+// A cached TableReader is kept alive while a PinnedHandle on it is outstanding,
+// so the cache may evict and delete it once the handle is released.
 class TableCache {
   public:
+    // Takes ownership of `table_cache`; it must be non-null until destruction.
     TableCache(Env *env, std::string db_dir, const Comparator &comparator, const Compressor &compressor,
-               const Filter &filter, size_t table_cache_size, CacheType table_cache_type, size_t vlog_reader_cache_size,
-               CacheType vlog_reader_cache_type, MapType map_type);
-    ~TableCache();
+               const Filter &filter, Cache *table_cache, VLogReaderCache *vlog_cache);
 
     TableCache(const TableCache &) = delete;
     TableCache &operator=(const TableCache &) = delete;
@@ -68,14 +70,13 @@ class TableCache {
     // Drops the cached entry for `table_number` (e.g. after compaction).
     Status erase(uint64_t table_number);
 
-    size_t total_charge() const { return cache_.total_charge(); }
+    size_t total_charge() const { return cache_.valid() ? cache_.total_charge() : 0; }
     uint64_t namespace_id() const { return namespace_id_; }
 
   private:
-    // Looks up or opens the table.  On success `*reader` is usable.  When the
-    // returned pin is valid the cache owns the reader; otherwise the caller
-    // owns it and must unref() it.
-    Status find_table(uint64_t table_number, CachePin<TableReader> *pin, TableReader **reader);
+    // Looks up or opens the table.  On success `*pin` owns the reader and
+    // `*reader` points at it.
+    Status find_table(uint64_t table_number, Cache::PinnedHandle *pin, TableReader **reader);
 
     // Builds the namespaced cache key for a table number.
     std::string cache_key(uint64_t table_number) const;
@@ -88,9 +89,8 @@ class TableCache {
     Compressor compressor_;
     Filter filter_;
     std::string db_dir_;
-    // Shared by every TableReader this cache opens.  TableReaders hold their
-    // own references, so the cache outlives iterators that outlive this
-    // TableCache.  Owned through one manual reference.
+    // Borrowed from the DB layer; shared by every TableReader this cache opens.
+    // Non-owning.
     VLogReaderCache *vlog_cache_ = nullptr;
     CacheWrapper cache_;
     uint64_t namespace_id_;

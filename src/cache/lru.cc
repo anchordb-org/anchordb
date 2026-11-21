@@ -40,11 +40,13 @@ Cache::Handle *LRUCache::insert(std::string_view key, uint64_t hash, void *value
         in_use_.push_front(HashedKey{e->key(), e->hash}, e);
         usage_ += charge;
 
-        // Replace any previous entry for this key.
+        // Replace any previous entry for this key.  Remove the old map entry
+        // before inserting the new handle so the stored key view points into
+        // `e` (the surviving node), not the freed `old`.
         LRUHandle *old =
-            std::visit([&](auto &active_map) { return active_map.get(HashedKey{e->key(), e->hash}); }, map_);
-        std::visit([&](auto &active_map) { active_map.insert(HashedKey{e->key(), e->hash}, e); }, map_);
+            std::visit([&](auto &active_map) { return active_map.remove(HashedKey{e->key(), e->hash}); }, map_);
         finish_erase(old);
+        std::visit([&](auto &active_map) { active_map.insert(HashedKey{e->key(), e->hash}, e); }, map_);
     }
 
     while (usage_ > capacity_ && !lru_.is_empty()) {

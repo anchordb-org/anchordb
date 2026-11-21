@@ -22,6 +22,26 @@ Cache::Handle *ClockProCache::insert(std::string_view key, uint64_t hash, void *
                                      void (*deleter)(std::string_view key, void *value)) {
     mutex_.lock();
 
+    // A zero-capacity cache stores nothing.  Hand back an uncached node that
+    // the caller's release() frees, matching LRU's capacity-0 behavior and
+    // avoiding a ring that can never be drained by evict().
+    if (capacity_ == 0) {
+        ClockProHandle *uncached = reinterpret_cast<ClockProHandle *>(malloc(sizeof(ClockProHandle) - 1 + key.size()));
+        uncached->value = value;
+        uncached->deleter = deleter;
+        uncached->charge = charge;
+        uncached->key_len = key.size();
+        uncached->hash = hash;
+        uncached->in_cache = false;
+        uncached->is_resident = true;
+        uncached->is_hot = false;
+        uncached->ref_bit = false;
+        uncached->refs = 1; // only the returned handle
+        std::memcpy(uncached->key_data, key.data(), key.size());
+        mutex_.unlock();
+        return reinterpret_cast<Cache::Handle *>(uncached);
+    }
+
     ClockProHandle *e = std::visit([&](auto &active_map) { return active_map.get(HashedKey{key, hash}); }, map_);
 
     if (e != nullptr) {
@@ -119,7 +139,23 @@ void ClockProCache::prune() {
 }
 
 void ClockProCache::evict() {
-    while (usage_ > capacity_ && !ring_.is_empty()) { hand_cold_step(); }
+    // The cold hand makes no progress when every node it visits is hot.  Bound
+    // a full traversal and then let the hot hand demote, otherwise an all-hot
+    // ring with usage_ > capacity_ would spin forever (e.g. small capacities
+    // where a single charge exceeds capacity).
+    size_t steps_without_progress = 0;
+    while (usage_ > capacity_ && !ring_.is_empty()) {
+        const size_t before = usage_;
+        hand_cold_step();
+        if (usage_ < before) {
+            steps_without_progress = 0;
+            continue;
+        }
+        if (++steps_without_progress > ring_.size()) {
+            hand_hot_step();
+            steps_without_progress = 0;
+        }
+    }
 }
 
 void ClockProCache::hand_cold_step() {
@@ -151,7 +187,10 @@ void ClockProCache::hand_cold_step() {
                 usage_ -= e->charge;
             } else {
                 // Remove non-resident history node completely. ring_remove()
-                // advances hand_cold_ past the freed node.
+                // advances hand_cold_ past the freed node.  Drop the map entry
+                // first: finish_erase() frees the node, and a dangling map entry
+                // would be dereferenced by the next lookup/insert.
+                std::visit([&](auto &active_map) { active_map.remove(HashedKey{e->key(), e->hash}); }, map_);
                 finish_erase(e);
                 return;
             }
@@ -195,6 +234,8 @@ void ClockProCache::hand_test_step() {
     // Test hand reclaims non-resident COLD history nodes that were never
     // re-referenced. ring_remove() advances hand_test_ past the freed node.
     if (!e->is_hot && !e->is_resident) {
+        // Remove the map entry before finish_erase() frees the node.
+        std::visit([&](auto &active_map) { active_map.remove(HashedKey{e->key(), e->hash}); }, map_);
         finish_erase(e);
         return;
     }

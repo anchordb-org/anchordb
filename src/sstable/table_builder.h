@@ -50,10 +50,11 @@ class WritableFileWriter;
 //
 // Inline and tombstone entries are encoded into -Data.adb and the resulting
 // record location becomes the entry's index handle.  Blob entries are not
-// written to -Data.adb at all: the memtable already stored the value in the vLog
-// and keeps a BlobHandle (file id, record offset, record size).  TableBuilder
-// writes that record-level handle into the index slot and never into the data
-// file; readers resolve the complete vLog record through the index.
+// written to -Data.adb at all: the DB layer has already stored the value in the
+// vLog and supplies a BlobHandle (file id, record offset, record size).
+// TableBuilder writes that record-level handle into the index slot and never
+// into the data file; the DB read path resolves the complete vLog record from
+// that handle.
 //
 // The builder owns the output files it opens through `env` and writes
 // them under the names in `files`.  finish() flushes and syncs -Data.adb and

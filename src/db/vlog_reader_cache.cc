@@ -25,16 +25,7 @@ namespace ANCHORDB_NAMESPACE {
 
 VLogReaderCache::VLogReaderCache(Env *env, Cache *cache) : env_(env), cache_(cache) {}
 
-Status VLogReaderCache::read(std::string_view filename, uint64_t offset, size_t n, std::string_view *result,
-                             char *scratch) {
-    Cache::PinnedHandle pin;
-    Status s = open_reader(filename, &pin);
-    if (!s.is_ok()) { return s; }
-    auto *reader = static_cast<RandomAccessFileReader *>(pin.value());
-    return reader->read(offset, n, result, scratch);
-}
-
-Status VLogReaderCache::open_reader(std::string_view filename, Cache::PinnedHandle *pin) {
+Status VLogReaderCache::open(std::string_view filename, Cache::PinnedHandle *pin) {
     if (pin == nullptr) { return Status::invalid_argument("vlog reader cache: null pin"); }
     if (env_ == nullptr) { return Status::not_supported("vlog reader cache: no env"); }
     if (!cache_.valid()) { return Status::invalid_argument("vlog reader cache: no cache"); }

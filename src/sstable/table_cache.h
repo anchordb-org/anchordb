@@ -21,7 +21,6 @@
 #include "anchordb/options.h"
 #include "anchordb/status.h"
 #include "cache/cache_wrapper.h"
-#include "db/vlog_reader_cache.h"
 #include "sstable/table_reader.h"
 #include <cstddef>
 #include <cstdint>
@@ -30,16 +29,13 @@
 
 namespace ANCHORDB_NAMESPACE {
 
+class EntryIterator;
+
 // Caches open TableReaders so repeated reads of the same table number avoid
 // re-opening files and re-parsing the summary.  The backing Cache is injected
 // and owned through a CacheWrapper: pass any Cache implementation (a built-in
 // policy from new_cache(...) or a custom subclass) to plug in a replacement
 // policy.
-//
-// `vlog_cache` is borrowed from the DB layer, which owns it; it must outlive
-// this TableCache and every reader opened through it.  Every TableReader this
-// cache opens resolves vLog files through it, so all tables share one set of
-// open descriptors.
 //
 // `comparator`, `compressor` and `filter` are forwarded unchanged to
 // TableReader::open, so cached readers use the same ordering and codecs the
@@ -53,19 +49,20 @@ class TableCache {
   public:
     // Takes ownership of `table_cache`; it must be non-null until destruction.
     TableCache(Env *env, std::string db_dir, const Comparator &comparator, const Compressor &compressor,
-               const Filter &filter, Cache *table_cache, VLogReaderCache *vlog_cache);
+               const Filter &filter, Cache *table_cache);
 
     TableCache(const TableCache &) = delete;
     TableCache &operator=(const TableCache &) = delete;
 
     // Point lookup against table `table_number`, opening and caching the table
-    // on first use.
-    Status get(const ReadOptions &options, uint64_t table_number, std::string_view key, std::string *value,
-               std::string *scratch);
+    // on first use.  Fills *out with the unresolved version (a tombstone is
+    // returned as an entry); the DB layer resolves any blob handle.
+    Status get_raw(uint64_t table_number, std::string_view key, ValueRef *out, std::string *scratch);
 
-    // Returns a heap-allocated iterator over `table_number` (caller deletes).
-    // The iterator keeps its table reader alive independently of the cache.
-    Status new_iterator(const ReadOptions &options, uint64_t table_number, Iterator **iter);
+    // Returns a heap-allocated unresolved entry iterator over `table_number`
+    // (caller deletes).  The iterator keeps its table reader alive
+    // independently of the cache.
+    Status new_iterator(uint64_t table_number, EntryIterator **iter);
 
     // Drops the cached entry for `table_number` (e.g. after compaction).
     Status erase(uint64_t table_number);
@@ -89,9 +86,6 @@ class TableCache {
     Compressor compressor_;
     Filter filter_;
     std::string db_dir_;
-    // Borrowed from the DB layer; shared by every TableReader this cache opens.
-    // Non-owning.
-    VLogReaderCache *vlog_cache_ = nullptr;
     CacheWrapper cache_;
     uint64_t namespace_id_;
 };

@@ -45,8 +45,8 @@ inline constexpr size_t kDefaultVLogReaderCacheSize = 8 * 1024 * 1024;
 // outstanding and is deleted through the cache deleter once the last pin is
 // released.
 //
-// Ownership: not reference counted.  The DB layer owns one instance and lends
-// it to the table cache and memtables; the owner must outlive every borrower.
+// Ownership: not reference counted.  It is an implementation detail of
+// BlobResolver, which owns the single instance and must outlive every read.
 //
 // Not copyable.  The wrapper is internally synchronized by the Cache, but a
 // single PinnedHandle must be released on the cache it came from.
@@ -58,18 +58,15 @@ class VLogReaderCache {
     VLogReaderCache(const VLogReaderCache &) = delete;
     VLogReaderCache &operator=(const VLogReaderCache &) = delete;
 
-    // Reads `n` bytes at `offset` from `filename`, reusing a cached reader when
-    // one is already open and opening/caching it on a miss.  `*result` points
-    // into `scratch` and follows RandomAccessFileReader::read's contract.
-    Status read(std::string_view filename, uint64_t offset, size_t n, std::string_view *result, char *scratch);
-
     // Returns a pinned open reader for `filename`, opening and caching it on a
     // miss.  The pin keeps the reader alive and must outlive every use of it.
-    Status open_reader(std::string_view filename, Cache::PinnedHandle *pin);
+    Status open(std::string_view filename, Cache::PinnedHandle *pin);
 
     // Removes `filename` from the cache.  The reader stays alive until any
     // outstanding read finishes.
     void erase(std::string_view filename);
+
+    bool valid() const { return cache_.valid(); }
 
     size_t total_charge() const { return cache_.valid() ? cache_.total_charge() : 0; }
 

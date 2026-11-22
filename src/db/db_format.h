@@ -43,11 +43,13 @@ inline bool is_valid_entry_type(EntryType type) {
     return static_cast<uint8_t>(type) <= static_cast<uint8_t>(EntryType::Blob);
 }
 
-// A reference to an encoded record in a WiscKey value-log file.  The memtable
-// stores entries larger than the configured threshold as EntryType::blob and
-// keeps this handle as the entry's value bytes.  `offset` and `size` address
-// the whole encoded record (header included), so a reader can fetch exactly
-// those bytes and decode them with RecordBufferReader.
+// A reference to an encoded record in a WiscKey value-log file.  The DB layer
+// writes values larger than the configured threshold to the vLog and stores an
+// EntryType::Blob entry whose value bytes are this handle: the memtable keeps
+// the handle as given, the SSTable index carries it in its slot, and the DB
+// read path resolves it.  `offset` and `size` address the whole encoded record
+// (header included), so a reader can fetch exactly those bytes and decode them
+// with RecordBufferReader.
 struct BlobHandle {
     uint32_t file_id = 0;
     uint32_t size = 0;
@@ -75,6 +77,24 @@ inline bool parse_blob_handle(std::string_view encoded, BlobHandle *handle) {
     handle->offset = decode_fixed_64(p + 2 * sizeof(uint32_t));
     return true;
 }
+
+// A versioned value as produced by the read path.  Storage layers (memtable and
+// SSTable reader) return this instead of materializing blob bytes: `type` says
+// how to interpret the payload, `timestamp` orders the version, and the payload
+// is either an inline view or a vLog handle.  Blob values are never read here;
+// the DB layer resolves them through BlobResolver.
+//
+// `inline_value` is valid for Inline and Tombstone entries and points into
+// storage owned by the producing iterator/read call.  It is empty for Blob.
+struct ValueRef {
+    EntryType type = EntryType::Inline;
+    uint64_t timestamp = 0;
+    std::string_view inline_value;
+    BlobHandle blob;
+
+    bool is_blob() const { return type == EntryType::Blob; }
+    bool is_tombstone() const { return type == EntryType::Tombstone; }
+};
 
 // Value-log entries are addressed directly by the index: the index slot stores
 // the vLog file id, the byte offset of the complete record within that file,

@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "sstable/table_cache.h"
 #include "anchordb/cache.h"
 #include "anchordb/status.h"
+#include "db/entry_iterator.h"
+#include "sstable/table_cache.h"
 #include "sstable/table_file_set.h"
 #include "util/coding.h"
 #include <string>
@@ -26,9 +27,9 @@
 namespace ANCHORDB_NAMESPACE {
 
 TableCache::TableCache(Env *env, std::string db_dir, const Comparator &comparator, const Compressor &compressor,
-                       const Filter &filter, Cache *table_cache, VLogReaderCache *vlog_cache)
+                       const Filter &filter, Cache *table_cache)
     : env_(env), comparator_(comparator), compressor_(compressor), filter_(filter), db_dir_(std::move(db_dir)),
-      vlog_cache_(vlog_cache), cache_(table_cache), namespace_id_(cache_.valid() ? cache_.new_id() : 0) {}
+      cache_(table_cache), namespace_id_(cache_.valid() ? cache_.new_id() : 0) {}
 
 std::string TableCache::cache_key(uint64_t table_number) const {
     std::string key;
@@ -50,24 +51,23 @@ Status TableCache::find_table(uint64_t table_number, Cache::PinnedHandle *pin, T
     const std::string key = cache_key(table_number);
     auto open = [this, table_number](TableReader **out) {
         return TableReader::open(env_, comparator_, compressor_, filter_, make_table_file_set(db_dir_, table_number),
-                                 db_dir_, vlog_cache_, out);
+                                 out);
     };
     auto charge = [](TableReader *opened) { return opened->cache_charge(); };
 
     return cache_lookup_or_open<TableReader>(cache_, key, pin, reader, open, charge, &delete_entry);
 }
 
-Status TableCache::get(const ReadOptions &options, uint64_t table_number, std::string_view key, std::string *value,
-                       std::string *scratch) {
+Status TableCache::get_raw(uint64_t table_number, std::string_view key, ValueRef *out, std::string *scratch) {
     Cache::PinnedHandle pin;
     TableReader *reader = nullptr;
     Status s = find_table(table_number, &pin, &reader);
     if (!s.is_ok()) { return s; }
 
-    return reader->get(options, key, value, scratch);
+    return reader->get_raw(key, out, scratch);
 }
 
-Status TableCache::new_iterator(const ReadOptions &options, uint64_t table_number, Iterator **iter) {
+Status TableCache::new_iterator(uint64_t table_number, EntryIterator **iter) {
     if (iter == nullptr) { return Status::invalid_argument("TableCache::new_iterator: null iterator output"); }
 
     Cache::PinnedHandle pin;
@@ -76,7 +76,7 @@ Status TableCache::new_iterator(const ReadOptions &options, uint64_t table_numbe
     if (!s.is_ok()) { return s; }
 
     // The iterator holds its own reader reference, so the pin can be dropped.
-    *iter = reader->new_iterator(options);
+    *iter = reader->new_iterator();
     return Status::ok();
 }
 

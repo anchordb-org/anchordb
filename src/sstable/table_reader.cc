@@ -12,17 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "sstable/table_reader.h"
-#include "anchordb/cache.h"
 #include "anchordb/env.h"
-#include "db/vlog_reader_cache.h"
-#include "file/filename.h"
+#include "db/entry_iterator.h"
 #include "sstable/data_record.h"
+#include "sstable/table_reader.h"
 #include <cassert>
 #include <cstring>
 #include <string>
 #include <string_view>
-#include <utility>
 
 #include "anchordb/anchordb_namespace.h"
 
@@ -87,8 +84,7 @@ size_t TableReader::cache_charge() const {
 }
 
 Status TableReader::open(Env *env, const Comparator &comparator, const Compressor &compressor, const Filter &filter,
-                         const TableFileSet &files, std::string db_dir, VLogReaderCache *vlog_cache,
-                         TableReader **result) {
+                         const TableFileSet &files, TableReader **result) {
     if (result == nullptr) { return Status::invalid_argument("TableReader::open: null result"); }
     if (env == nullptr) { return Status::invalid_argument("TableReader::open: env is null"); }
 
@@ -98,8 +94,6 @@ Status TableReader::open(Env *env, const Comparator &comparator, const Compresso
     if (reader->comparator_.compare == nullptr) { reader->comparator_ = new_byte_wise_comparator(); }
     reader->compressor_ = compressor;
     reader->filter_spec_ = filter;
-    reader->db_dir_ = std::move(db_dir);
-    reader->vlog_cache_ = vlog_cache;
 
     Status s = reader->init_(files);
     if (!s.is_ok()) {
@@ -204,11 +198,9 @@ Status TableReader::init_(const TableFileSet &files) {
     return Status::ok();
 }
 
-Status TableReader::get(const ReadOptions &options, std::string_view key, std::string *value,
-                        std::string *scratch) const {
-    (void)options;
-    if (value == nullptr) { return Status::invalid_argument("TableReader::get: null value"); }
-    if (scratch == nullptr) { return Status::invalid_argument("TableReader::get: null scratch"); }
+Status TableReader::get_raw(std::string_view key, ValueRef *out, std::string *scratch) const {
+    if (out == nullptr) { return Status::invalid_argument("TableReader::get_raw: null value ref"); }
+    if (scratch == nullptr) { return Status::invalid_argument("TableReader::get_raw: null scratch"); }
 
     // A definite filter miss means the key is absent, so skip all I/O.
     if (filter_ != nullptr && !filter_->key_may_match(key)) {
@@ -233,20 +225,18 @@ Status TableReader::get(const ReadOptions &options, std::string_view key, std::s
         return Status::not_found("key not found", std::string(key));
     }
 
-    const ValueHandle handle = reader.entry(slot).handle;
-    if (handle.type == EntryType::Blob) { return read_blob_record_(handle, key, value, scratch); }
-    return read_inline_record_(handle, key, value, scratch);
+    return make_value_ref_(reader.entry(slot), scratch, out);
 }
 
-// Bidirectional iterator over a TableReader.  It keeps one (possibly
-// compressed) index block resident at a time and spans block boundaries.
-// Tombstone entries are skipped; blob values are resolved through the reader's
-// vLog descriptor pool.
-class TableIterator : public Iterator {
+// Bidirectional iterator over a TableReader's index.  It walks index slots in
+// key order and spans block boundaries, but never reads a data record or a vLog
+// record just to position: type()/timestamp() come from the resident index slot,
+// and value_ref() lazily reads the data record only for inline and tombstone
+// entries.  Blob entries yield their handle untouched.
+class TableIterator final : public EntryIterator {
   public:
-    TableIterator(TableReader *owner, const ReadOptions &options)
+    TableIterator(TableReader *owner)
         : owner_(owner), comparator_(owner->comparator_), block_count_(owner->summary_->size()) {
-        (void)options;
         owner_->ref();
     }
 
@@ -267,7 +257,7 @@ class TableIterator : public Iterator {
         load_block(0);
         if (!status_.is_ok()) { return; }
         slot_ = 0;
-        skip_forward();
+        settle_forward();
     }
 
     void seek_to_last() override {
@@ -280,7 +270,7 @@ class TableIterator : public Iterator {
         load_block(block_count_ - 1);
         if (!status_.is_ok()) { return; }
         slot_ = block_reader_->size();
-        skip_backward();
+        settle_backward();
     }
 
     void seek(std::string_view target) override {
@@ -299,20 +289,20 @@ class TableIterator : public Iterator {
         load_block(block_index);
         if (!status_.is_ok()) { return; }
         slot_ = block_reader_->lower_bound(target, comparator_);
-        skip_forward();
+        settle_forward();
     }
 
     void next() override {
         assert(valid_);
         ++slot_;
-        skip_forward();
+        settle_forward();
     }
 
     void prev() override {
         assert(valid_);
         if (slot_ > 0) {
             --slot_;
-            skip_backward();
+            valid_ = true;
             return;
         }
         if (block_index_ == 0) {
@@ -325,30 +315,42 @@ class TableIterator : public Iterator {
             return;
         }
         slot_ = block_reader_->size();
-        skip_backward();
+        settle_backward();
     }
 
     std::string_view key() const override {
         assert(valid_);
-        return key_;
+        return block_reader_->entry(slot_).key;
     }
 
-    std::string_view value() const override {
+    EntryType type() const override {
         assert(valid_);
-        return value_;
+        return block_reader_->entry(slot_).handle.type;
+    }
+
+    uint64_t timestamp() const override {
+        assert(valid_);
+        return block_reader_->entry(slot_).timestamp;
+    }
+
+    ValueRef value_ref() const override {
+        assert(valid_);
+        ValueRef ref;
+        Status s = owner_->make_value_ref_(block_reader_->entry(slot_), &scratch_, &ref);
+        if (!s.is_ok()) {
+            status_ = s;
+            return ValueRef();
+        }
+        return ref;
     }
 
     Status status() const override { return status_; }
 
   private:
-    bool visible(size_t slot) const { return block_reader_->entry(slot).handle.type != EntryType::Tombstone; }
-
     void invalidate() {
         valid_ = false;
         delete block_reader_;
         block_reader_ = nullptr;
-        key_ = std::string_view();
-        value_ = std::string_view();
     }
 
     void load_block(size_t block_index) {
@@ -373,39 +375,16 @@ class TableIterator : public Iterator {
         }
     }
 
-    void materialize_current() {
-        const IndexBlockEntry entry = block_reader_->entry(slot_);
-        key_ = entry.key;
-        value_buf_.clear();
-
-        Status s;
-        if (entry.handle.type == EntryType::Blob) {
-            s = owner_->read_blob_record_(entry.handle, key_, &value_buf_, &scratch_);
-        } else {
-            s = owner_->read_inline_record_(entry.handle, key_, &value_buf_, &scratch_);
-        }
-        if (!s.is_ok()) {
-            status_ = s;
-            invalidate();
-            return;
-        }
-        value_ = value_buf_;
-        valid_ = true;
-    }
-
-    void skip_forward() {
+    // Positions on the next in-range slot, crossing block boundaries.
+    void settle_forward() {
         while (true) {
             if (block_reader_ == nullptr) {
                 invalidate();
                 return;
             }
             if (slot_ < block_reader_->size()) {
-                if (visible(slot_)) {
-                    materialize_current();
-                    return;
-                }
-                ++slot_;
-                continue;
+                valid_ = true;
+                return;
             }
             if (block_index_ + 1 >= block_count_) {
                 invalidate();
@@ -420,7 +399,8 @@ class TableIterator : public Iterator {
         }
     }
 
-    void skip_backward() {
+    // Positions on the previous in-range slot, crossing block boundaries.
+    void settle_backward() {
         while (true) {
             if (block_reader_ == nullptr) {
                 invalidate();
@@ -439,29 +419,14 @@ class TableIterator : public Iterator {
                         invalidate();
                         return;
                     }
+                    slot_ = block_reader_->size();
                     continue;
                 }
                 slot_ = block_reader_->size() - 1;
                 continue;
             }
-            if (visible(slot_)) {
-                materialize_current();
-                return;
-            }
-            if (slot_ == 0) {
-                if (block_index_ == 0) {
-                    invalidate();
-                    return;
-                }
-                load_block(block_index_ - 1);
-                if (!status_.is_ok()) {
-                    invalidate();
-                    return;
-                }
-                slot_ = block_reader_->size();
-                continue;
-            }
-            --slot_;
+            valid_ = true;
+            return;
         }
     }
 
@@ -479,17 +444,16 @@ class TableIterator : public Iterator {
     size_t slot_ = 0;
     bool valid_ = false;
 
-    std::string value_buf_;
-    std::string scratch_;
-    std::string_view key_;
-    std::string_view value_;
-    Status status_;
+    mutable std::string scratch_;
+    mutable Status status_;
 };
 
-Iterator *TableReader::new_iterator(const ReadOptions &options) {
-    if (summary_ == nullptr || !summary_->valid()) { return new_error_iterator(Status::corruption("invalid table")); }
-    if (summary_->empty()) { return new_empty_iterator(); }
-    return new TableIterator(this, options);
+EntryIterator *TableReader::new_iterator() {
+    if (summary_ == nullptr || !summary_->valid()) {
+        return new_error_entry_iterator(Status::corruption("invalid table"));
+    }
+    if (summary_->empty()) { return new_empty_entry_iterator(); }
+    return new TableIterator(this);
 }
 
 Status TableReader::read_index_block_(uint64_t block_offset, uint32_t compressed_size, std::string *stored_buf,
@@ -532,8 +496,10 @@ Status TableReader::read_index_block_(uint64_t block_offset, uint32_t compressed
     return Status::ok();
 }
 
-Status TableReader::read_inline_record_(const ValueHandle &handle, std::string_view expected_key, std::string *value,
-                                        std::string *scratch) const {
+Status TableReader::read_inline_value_(const ValueHandle &handle, std::string_view expected_key, std::string *scratch,
+                                       std::string_view *value) const {
+    if (value == nullptr) { return Status::invalid_argument("table reader: null inline value output"); }
+    *value = std::string_view();
     if (handle.type == EntryType::Blob) {
         return Status::invalid_argument("table reader: blob handle passed to inline reader");
     }
@@ -553,48 +519,27 @@ Status TableReader::read_inline_record_(const ValueHandle &handle, std::string_v
     if (!s.is_ok()) { return s; }
     if (record.key != expected_key) { return Status::corruption("table reader: data record key mismatch"); }
     if (record.type != handle.type) { return Status::corruption("table reader: index/data record metadata mismatch"); }
-    if (record.type == EntryType::Tombstone) { return Status::not_found("tombstone", std::string(expected_key)); }
-    value->assign(record.value.data(), record.value.size());
+    *value = record.value;
     return Status::ok();
 }
 
-Status TableReader::read_blob_record_(const ValueHandle &handle, std::string_view expected_key, std::string *value,
-                                      std::string *scratch) const {
-    if (handle.type != EntryType::Blob) {
-        return Status::invalid_argument("table reader: non-blob handle passed to blob reader");
-    }
-    if (handle.size < kDataRecordHeaderSize) {
-        return Status::corruption("table reader: vLog record size too small", std::to_string(handle.size));
-    }
-    if (vlog_cache_ == nullptr) {
-        return Status::not_supported("table reader: no vLog reader cache", std::to_string(handle.file_id));
-    }
-
-    const std::string filename = vlog_filename(db_dir_, handle.file_id);
-    // Use the live file size, not RandomAccessFileReader::size(): a reader
-    // cached for this file may predate later appends to the same vLog file.
-    uint64_t file_size = 0;
-    Status s = env_->get_file_size(filename, &file_size);
-    if (!s.is_ok()) { return s; }
-    if (handle.offset > file_size || handle.size > file_size - handle.offset) {
-        return Status::corruption("table reader: vLog record out of range", std::to_string(handle.offset));
+Status TableReader::make_value_ref_(const IndexBlockEntry &entry, std::string *scratch, ValueRef *out) const {
+    // Reset first so a reused output cannot retain a stale inline view (or a
+    // blob handle) from a previous call.
+    *out = ValueRef();
+    out->type = entry.handle.type;
+    out->timestamp = entry.timestamp;
+    if (entry.handle.type == EntryType::Blob) {
+        out->blob.file_id = entry.handle.file_id;
+        out->blob.size = entry.handle.size;
+        out->blob.offset = entry.handle.offset;
+        return Status::ok();
     }
 
-    Cache::PinnedHandle pin;
-    s = vlog_cache_->open_reader(filename, &pin);
+    std::string_view inline_value;
+    Status s = read_inline_value_(entry.handle, entry.key, scratch, &inline_value);
     if (!s.is_ok()) { return s; }
-
-    auto *reader = static_cast<RandomAccessFileReader *>(pin.value());
-    std::string_view view;
-    s = read_exact(reader, handle.offset, handle.size, scratch, &view);
-    if (!s.is_ok()) { return s; }
-
-    ParsedDataRecord record;
-    s = decode_single_record(view, &record);
-    if (!s.is_ok()) { return s; }
-    if (!record.is_blob()) { return Status::corruption("table reader: vLog record is not a blob"); }
-    if (record.key != expected_key) { return Status::corruption("table reader: vLog record key mismatch"); }
-    value->assign(record.value.data(), record.value.size());
+    out->inline_value = inline_value;
     return Status::ok();
 }
 

@@ -33,7 +33,8 @@ class MemTable;
 //
 // The job iterates the memtable with new_raw_iterator(), so blob entries are
 // copied as their encoded BlobHandle and no value is read back from the vLog.
-// MemTable syncs each vLog record when it stores the handle, so the published
+// The memtable neither writes nor syncs the vLog any more: the DB write path
+// must make a blob record durable before logging its handle, so a published
 // table never references vLog bytes that are not yet durable.
 // Entries are handed to TableBuilder in the memtable's native order (user key
 // ascending, timestamp descending), which is the order TableBuilder enforces.

@@ -15,9 +15,8 @@
 #pragma once
 
 #include "anchordb/comparator.h"
-#include "anchordb/iterator.h"
 #include "anchordb/status.h"
-#include "db/vlog_reader_cache.h"
+#include "db/entry_iterator.h"
 #include "memory/arena.h"
 #include "memtable/entry.h"
 #include "memtable/skiplist.h"
@@ -25,7 +24,6 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
-#include <string>
 #include <string_view>
 #include <utility>
 
@@ -33,9 +31,7 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-class Env;
 class MemTable;
-class DataRecordWriter;
 
 // Orders memtable entries by user key ascending (via the user comparator), then
 // timestamp descending (newest first), then EntryType descending.  The value
@@ -64,28 +60,28 @@ struct KeyComparator {
 using Table = Skiplist<const char *, KeyComparator>;
 
 // Iterator over a memtable's skiplist.  key() returns the user key; a memtable
-// can hold several versions of one user key, ordered newest first.  Blob values
-// are resolved from the vLog on demand; the returned view points into the
-// iterator's scratch buffer.
-class MemtableIterator : public Iterator {
+// can hold several versions of one user key, ordered newest first.
+//
+// This yields unresolved entries: type()/timestamp() come straight from the
+// stored key trailer, and value_ref() returns the stored bytes (a blob entry
+// carries its encoded BlobHandle).  It never reads the vLog and does not hide
+// tombstones; resolving and tombstone filtering happen in the DB layer.
+class MemtableIterator final : public EntryIterator {
   public:
-    MemtableIterator(Table *table, const MemTable *memtable) : memtable_(memtable), iter_(table) {}
+    explicit MemtableIterator(Table *table) : iter_(table) {}
 
     MemtableIterator(MemtableIterator &&other) noexcept
-        : memtable_(other.memtable_), iter_(std::move(other.iter_)), value_scratch_(std::move(other.value_scratch_)),
-          status_(std::move(other.status_)) {}
+        : iter_(std::move(other.iter_)), status_(std::move(other.status_)) {}
 
     MemtableIterator &operator=(MemtableIterator &&other) {
         if (this != &other) {
-            this->memtable_ = other.memtable_;
             this->iter_ = std::move(other.iter_);
-            this->value_scratch_ = std::move(other.value_scratch_);
             this->status_ = std::move(other.status_);
         }
         return *this;
     }
 
-    ~MemtableIterator() = default;
+    ~MemtableIterator() override = default;
 
     bool valid() const override { return iter_.valid(); }
     void next() override { iter_.next(); }
@@ -96,36 +92,29 @@ class MemtableIterator : public Iterator {
     }
     void seek_to_first() override { iter_.seek_to_first(); }
     void seek_to_last() override { iter_.seek_to_last(); }
+
     std::string_view key() const override { return MemtableEntry::key_view(iter_.key()); }
-    std::string_view value() const override;
+    EntryType type() const override;
+    uint64_t timestamp() const override;
+    ValueRef value_ref() const override;
     Status status() const override { return status_; }
 
   private:
-    const MemTable *memtable_;
     typename Table::Iterator iter_;
-    mutable std::string value_scratch_; // resolved blob value
     mutable Status status_;
 };
 
 // In-memory table backed by a skiplist and arena.
 //
-// When `vlog_writer` is non-null, values larger than `value_threshold` are
-// appended to the writer's vLog file and the memtable stores a BlobHandle as
-// the entry value.  The caller owns the writer and must keep it alive for the
-// memtable's lifetime.  `env` and `vlog_dbname` are needed to reopen the
-// numbered vLog file by `file_id` when a blob value is read back;
-// `vlog_reader_cache` is the DB-owned reader cache the memtable borrows for
-// those reads and must outlive it.  It is required; pass nullptr explicitly to
-// disable blob reads.
+// The memtable stores exactly what it is given.  It does not decide whether a
+// value belongs in the vLog: the DB layer makes that choice, writes the value
+// to the vLog, and hands the memtable an EntryType::Blob entry whose value
+// bytes are an encoded BlobHandle.  The memtable performs no file I/O and never
+// resolves blobs.
 class MemTable {
   public:
-    explicit MemTable(Comparator comparator, const uint32_t arena_block_size, VLogReaderCache *vlog_reader_cache,
-                      size_t max_key_size = kDefaultMaxKeySize, DataRecordWriter *vlog_writer = nullptr,
-                      uint32_t vlog_file_id = 0, size_t value_threshold = 4 * 1024, Env *env = nullptr,
-                      std::string vlog_dbname = std::string())
+    explicit MemTable(Comparator comparator, const uint32_t arena_block_size, size_t max_key_size = kDefaultMaxKeySize)
         : comparator_(std::move(comparator)), arena_(arena_block_size), refs_{0}, max_key_size_(max_key_size),
-          value_threshold_(value_threshold), vlog_writer_(vlog_writer), vlog_file_id_(vlog_file_id), env_(env),
-          vlog_dbname_(std::move(vlog_dbname)), vlog_reader_cache_(vlog_reader_cache),
           table_(KeyComparator(comparator_), &arena_) {}
 
     MemTable(const MemTable &) = delete;
@@ -142,12 +131,11 @@ class MemTable {
 
     // Forward-only iterator over the raw stored entries of this memtable.
     //
-    // Unlike MemtableIterator, this resolves nothing: entry().value() is
-    // exactly the bytes stored in the arena.  For EntryType::Blob that is the
-    // encoded BlobHandle (see db_format.h), so a flush can copy the handle
-    // into an SSTable index slot without touching the vLog.  The returned
-    // MemtableEntry owns no bytes; its views are valid only until next() or
-    // destruction.
+    // entry().value() is exactly the bytes stored in the arena.  For
+    // EntryType::Blob that is the encoded BlobHandle (see db_format.h), so a
+    // flush can copy the handle into an SSTable index slot without touching the
+    // vLog.  The returned MemtableEntry owns no bytes; its views are valid only
+    // until next() or destruction.
     //
     // The memtable must be immutable while this iterator is used, consistent
     // with the memtable's single-writer contract.
@@ -175,47 +163,38 @@ class MemTable {
 
     size_t approximate_memory_usage() const { return arena_.memory_usage(); }
 
-    Iterator *new_iterator() { return new MemtableIterator(&table_, this); }
+    // Returns a bidirectional iterator over every stored entry, tombstones
+    // included, yielding unresolved values.  The caller owns it.
+    EntryIterator *new_iterator() { return new MemtableIterator(&table_); }
 
     // Returns a forward-only iterator over the raw stored entries.  Used by the
     // flush path, which needs EntryType, timestamp and the undecoded value.
     RawIterator new_raw_iterator() const { return RawIterator(&table_); }
 
     // Inserts one entry stamped with `timestamp`.  Returns
-    // Status::invalid_argument when `key` exceeds max_key_size() or `type` is
-    // not a valid EntryType.  Not thread-safe: writers must be serialized.
+    // Status::invalid_argument when `key` exceeds max_key_size(), `type` is not
+    // a valid EntryType, or a Blob entry's value is not an encoded BlobHandle.
+    // Not thread-safe: writers must be serialized.
     Status add(uint64_t timestamp, EntryType type, std::string_view key, std::string_view value);
 
     // Maximum accepted key length in bytes.
     size_t max_key_size() const { return max_key_size_; }
 
-    // Looks up `key`.  Returns true and fills *value for a live entry, false
-    // with *s set to not_found for a tombstone, or false with *s untouched when
-    // the key is absent.
-    bool get(const LookUpKey &key, std::string *value, Status *s);
+    // Looks up `key` and returns the newest stored version without resolving
+    // it.  Returns true and fills *out for any entry, including a tombstone;
+    // returns false when the key is absent (leaving *out untouched) or on
+    // corruption (setting *s).
+    bool get_raw(const LookUpKey &key, ValueRef *out, Status *s);
 
   private:
     friend class MemtableIterator;
 
     ~MemTable() { assert(refs_.load(std::memory_order_relaxed) == 0); }
 
-    // Reads and decodes the vLog record referenced by `handle`, copies its
-    // value into *value and validates the stored key and entry type.
-    Status read_blob_(const BlobHandle &handle, std::string_view expected_key, std::string *value) const;
-
     Comparator comparator_;
     Arena arena_;
     std::atomic<int> refs_;
     size_t max_key_size_;
-    size_t value_threshold_;
-    DataRecordWriter *vlog_writer_;
-    uint32_t vlog_file_id_;
-    Env *env_;
-    std::string vlog_dbname_;
-    // Borrowed DB-owned vLog reader cache, keyed by file name.  Must outlive the
-    // memtable; null disables blob reads.  Mutable because blob reads go
-    // through a const memtable view.
-    mutable VLogReaderCache *vlog_reader_cache_;
     Table table_;
 };
 

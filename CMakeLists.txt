@@ -90,6 +90,12 @@ target_sources(anchordb
         src/db/wal.h
         src/db/vlog_reader_cache.h
         src/db/vlog_reader_cache.cc
+        src/db/blob_resolver.h
+        src/db/blob_resolver.cc
+        src/db/entry_iterator.h
+        src/db/entry_iterator.cc
+        src/db/resolving_iterator.h
+        src/db/resolving_iterator.cc
         src/cache/cache.cc
         src/cache/cache_wrapper.h
         src/cache/util.h

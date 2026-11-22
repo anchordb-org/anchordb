@@ -87,7 +87,7 @@ struct ANCHORDB_EXPORT Options {
     size_t table_cache_size = 8 * 1024 * 1024;
     CacheType table_cache_type = CacheType::LRU;
     // Shared vLog reader cache: capacity in bytes and the replacement policy
-    // used for the pool of open vLog file descriptors (see VLogReaderCache).
+    // used for the pool of open vLog file descriptors in the DB read path.
     size_t vlog_reader_cache_size = 8 * 1024 * 1024;
     CacheType vlog_reader_cache_type = CacheType::LRU;
     // Optional shared block cache.  Not owned by the database.
@@ -118,14 +118,6 @@ struct ANCHORDB_EXPORT Options {
     size_t manifest_max_file_size = 4 * 1024 * 1024;
     // Upper bound on concurrently open file descriptors.
     int max_open_files = 1000;
-};
-
-// Per-read tuning options.
-struct ANCHORDB_EXPORT ReadOptions {
-    // Verify block checksums on read.  Stronger, but slower.
-    bool verify_checksums = false;
-    // Whether blocks read are inserted into the block cache.
-    bool fill_cache = true;
 };
 
 // Per-write tuning options.

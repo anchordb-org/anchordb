@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "sstable/table_cache.h"
 #include "anchordb/cache.h"
 #include "anchordb/status.h"
 #include "db/entry_iterator.h"
-#include "sstable/table_cache.h"
 #include "sstable/table_file_set.h"
 #include "util/coding.h"
 #include <string>
@@ -27,16 +27,15 @@
 namespace ANCHORDB_NAMESPACE {
 
 TableCache::TableCache(Env *env, std::string db_dir, const Comparator &comparator, const Compressor &compressor,
-                       const Filter &filter, Cache *table_cache)
+                       const Filter &filter, Cache *table_cache, Cache *block_cache)
     : env_(env), comparator_(comparator), compressor_(compressor), filter_(filter), db_dir_(std::move(db_dir)),
-      cache_(table_cache), namespace_id_(cache_.valid() ? cache_.new_id() : 0) {}
+      cache_(table_cache), key_namespace_(table_cache), block_cache_(block_cache) {}
 
 std::string TableCache::cache_key(uint64_t table_number) const {
     std::string key;
-    key.reserve(2 * sizeof(uint64_t));
+    key.reserve(CacheKeyNamespace::kPrefixSize + sizeof(uint64_t));
+    key_namespace_.append_prefix(&key);
     char buf[sizeof(uint64_t)];
-    encode_fixed_64(buf, namespace_id_);
-    key.append(buf, sizeof(buf));
     encode_fixed_64(buf, table_number);
     key.append(buf, sizeof(buf));
     return key;
@@ -44,22 +43,23 @@ std::string TableCache::cache_key(uint64_t table_number) const {
 
 void TableCache::delete_entry(std::string_view, void *value) { static_cast<TableReader *>(value)->unref(); }
 
-Status TableCache::find_table(uint64_t table_number, Cache::PinnedHandle *pin, TableReader **reader) {
+Status TableCache::find_table(uint64_t table_number, Cache::Handle *pin, TableReader **reader) {
     if (pin == nullptr || reader == nullptr) { return Status::invalid_argument("TableCache::find_table: null output"); }
     if (!cache_.valid()) { return Status::invalid_argument("TableCache::find_table: no cache"); }
+    if (block_cache_ == nullptr) { return Status::invalid_argument("TableCache::find_table: no block cache"); }
 
     const std::string key = cache_key(table_number);
     auto open = [this, table_number](TableReader **out) {
         return TableReader::open(env_, comparator_, compressor_, filter_, make_table_file_set(db_dir_, table_number),
-                                 out);
+                                 out, block_cache_);
     };
     auto charge = [](TableReader *opened) { return opened->cache_charge(); };
 
     return cache_lookup_or_open<TableReader>(cache_, key, pin, reader, open, charge, &delete_entry);
 }
 
-Status TableCache::get_raw(uint64_t table_number, std::string_view key, ValueRef *out, std::string *scratch) {
-    Cache::PinnedHandle pin;
+Status TableCache::lookup_unresolved(uint64_t table_number, std::string_view key, ValueRef *out, std::string *scratch) {
+    Cache::Handle pin;
     TableReader *reader = nullptr;
     Status s = find_table(table_number, &pin, &reader);
     if (!s.is_ok()) { return s; }
@@ -70,7 +70,7 @@ Status TableCache::get_raw(uint64_t table_number, std::string_view key, ValueRef
 Status TableCache::new_iterator(uint64_t table_number, EntryIterator **iter) {
     if (iter == nullptr) { return Status::invalid_argument("TableCache::new_iterator: null iterator output"); }
 
-    Cache::PinnedHandle pin;
+    Cache::Handle pin;
     TableReader *reader = nullptr;
     Status s = find_table(table_number, &pin, &reader);
     if (!s.is_ok()) { return s; }

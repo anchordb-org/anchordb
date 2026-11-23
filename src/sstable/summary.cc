@@ -24,15 +24,21 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-SummaryBuilder::SummaryBuilder(uint32_t block_size, uint32_t compressor_id, size_t max_key_size)
-    : block_size_(block_size), compressor_id_(compressor_id), max_key_size_(max_key_size) {
+SummaryBuilder::SummaryBuilder(uint32_t block_size, uint32_t compressor_id, size_t max_key_size,
+                               uint32_t data_compressor_id, uint32_t data_block_size)
+    : block_size_(block_size), compressor_id_(compressor_id), data_compressor_id_(data_compressor_id),
+      data_block_size_(data_block_size), max_key_size_(max_key_size) {
     write_header_();
 }
 
 void SummaryBuilder::write_header_() {
     char header_buf[kSummaryHeaderSize];
-    encode_fixed_32(header_buf, block_size_);
-    encode_fixed_32(header_buf + sizeof(uint32_t), compressor_id_);
+    encode_fixed_32(header_buf, kSummaryMagic);
+    encode_fixed_32(header_buf + sizeof(uint32_t), kSummaryFormatVersion);
+    encode_fixed_32(header_buf + 2 * sizeof(uint32_t), block_size_);
+    encode_fixed_32(header_buf + 3 * sizeof(uint32_t), compressor_id_);
+    encode_fixed_32(header_buf + 4 * sizeof(uint32_t), data_compressor_id_);
+    encode_fixed_32(header_buf + 5 * sizeof(uint32_t), data_block_size_);
     buffer_.append(header_buf, kSummaryHeaderSize);
 }
 
@@ -58,23 +64,32 @@ bool SummaryBuilder::add(std::string_view key, uint64_t block_offset, uint32_t c
 }
 
 SummaryReader::SummaryReader(std::string_view buffer, Comparator comparator)
-    : comparator_(comparator), block_size_(0), compressor_id_(0), valid_(true) {
+    : comparator_(comparator), block_size_(0), compressor_id_(0), data_compressor_id_(0), data_block_size_(0),
+      valid_(true) {
     if (comparator_.compare == nullptr) { comparator_ = new_byte_wise_comparator(); }
 
     const char *p = buffer.data();
     const char *limit = p + buffer.size();
 
-    // The buffer must start with the block_size | compressor_id header; a zero
-    // block size is meaningless and marks the summary malformed.
     if (static_cast<size_t>(limit - p) < kSummaryHeaderSize) {
         valid_ = false;
         return;
     }
-    block_size_ = decode_fixed_32(p);
-    p += sizeof(uint32_t);
-    compressor_id_ = decode_fixed_32(p);
-    p += sizeof(uint32_t);
-    if (block_size_ == 0) {
+    if (decode_fixed_32(p) != kSummaryMagic) {
+        valid_ = false;
+        return;
+    }
+    const uint32_t format_version = decode_fixed_32(p + sizeof(uint32_t));
+    if (format_version != kSummaryFormatVersion) {
+        valid_ = false;
+        return;
+    }
+    block_size_ = decode_fixed_32(p + 2 * sizeof(uint32_t));
+    compressor_id_ = decode_fixed_32(p + 3 * sizeof(uint32_t));
+    data_compressor_id_ = decode_fixed_32(p + 4 * sizeof(uint32_t));
+    data_block_size_ = decode_fixed_32(p + 5 * sizeof(uint32_t));
+    p += kSummaryHeaderSize;
+    if (block_size_ == 0 || data_block_size_ == 0) {
         valid_ = false;
         return;
     }

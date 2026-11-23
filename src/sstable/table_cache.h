@@ -20,6 +20,7 @@
 #include "anchordb/filter.h"
 #include "anchordb/options.h"
 #include "anchordb/status.h"
+#include "cache/cache_key.h"
 #include "cache/cache_wrapper.h"
 #include "sstable/table_reader.h"
 #include <cstddef>
@@ -43,13 +44,16 @@ class EntryIterator;
 // sizes/policies) from Options.  The resident summary and filter are charged to
 // the cache; index blocks are read and decompressed per lookup.
 //
-// A cached TableReader is kept alive while a PinnedHandle on it is outstanding,
+// A cached TableReader is kept alive while a Handle on it is outstanding,
 // so the cache may evict and delete it once the handle is released.
 class TableCache {
   public:
     // Takes ownership of `table_cache`; it must be non-null until destruction.
+    // `block_cache` is the shared Cache for decompressed -Data.adb blocks
+    // (Options::block_cache).  It is borrowed, not owned, and must be non-null;
+    // a zero-capacity cache disables retention without changing ownership.
     TableCache(Env *env, std::string db_dir, const Comparator &comparator, const Compressor &compressor,
-               const Filter &filter, Cache *table_cache);
+               const Filter &filter, Cache *table_cache, Cache *block_cache);
 
     TableCache(const TableCache &) = delete;
     TableCache &operator=(const TableCache &) = delete;
@@ -57,7 +61,7 @@ class TableCache {
     // Point lookup against table `table_number`, opening and caching the table
     // on first use.  Fills *out with the unresolved version (a tombstone is
     // returned as an entry); the DB layer resolves any blob handle.
-    Status get_raw(uint64_t table_number, std::string_view key, ValueRef *out, std::string *scratch);
+    Status lookup_unresolved(uint64_t table_number, std::string_view key, ValueRef *out, std::string *scratch);
 
     // Returns a heap-allocated unresolved entry iterator over `table_number`
     // (caller deletes).  The iterator keeps its table reader alive
@@ -68,12 +72,12 @@ class TableCache {
     Status erase(uint64_t table_number);
 
     size_t total_charge() const { return cache_.valid() ? cache_.total_charge() : 0; }
-    uint64_t namespace_id() const { return namespace_id_; }
+    uint64_t namespace_id() const { return key_namespace_.id(); }
 
   private:
     // Looks up or opens the table.  On success `*pin` owns the reader and
     // `*reader` points at it.
-    Status find_table(uint64_t table_number, Cache::PinnedHandle *pin, TableReader **reader);
+    Status find_table(uint64_t table_number, Cache::Handle *pin, TableReader **reader);
 
     // Builds the namespaced cache key for a table number.
     std::string cache_key(uint64_t table_number) const;
@@ -87,7 +91,9 @@ class TableCache {
     Filter filter_;
     std::string db_dir_;
     CacheWrapper cache_;
-    uint64_t namespace_id_;
+    CacheKeyNamespace key_namespace_;
+    // Borrowed; never null.
+    Cache *block_cache_;
 };
 
 } // namespace ANCHORDB_NAMESPACE

@@ -84,18 +84,18 @@ bool IndexBlockBuilder::add(std::string_view key, ValueHandle handle, uint64_t t
     free_space_boundary_ = new_boundary;
     last_entry_offset_ = static_cast<int64_t>(new_boundary);
 
-    // Inline and tombstone entries never reference a vLog file.
-    const uint32_t file_id = handle.type == EntryType::Blob ? handle.file_id : 0;
-
-    // Fixed-size slot grows up from the header.
+    // Fixed-size slot grows up from the header.  The 4-byte field is a vLog
+    // file id for blobs and an absolute data-block offset for inline/tombstone
+    // entries.
+    const uint32_t file_id = handle.file_id;
     char *slot = buffer_ + forward_end;
     encode_fixed_16(slot + kSlotKeyOffsetOff,
                     static_cast<uint16_t>(new_boundary)); // key offset
     // Field order matches the documented slot layout.
     slot[kSlotTypeOff] = static_cast<char>(static_cast<uint8_t>(handle.type));
-    encode_fixed_32(slot + kSlotFileIdOff, file_id);
+    encode_fixed_32(slot + kSlotFileOrBlockOffsetOff, file_id);
     encode_fixed_32(slot + kSlotSizeOff, handle.size);
-    encode_fixed_64(slot + kSlotGlobalOffsetOff, handle.offset);
+    encode_fixed_32(slot + kSlotDataOffsetOff, handle.data_offset);
 
     ++slot_count_;
     return true;
@@ -165,9 +165,9 @@ IndexBlockEntry IndexBlockReader::entry(size_t index) const {
     IndexBlockEntry result;
     result.key = std::string_view(payload + sizeof(uint16_t), key_len);
     result.handle.type = static_cast<EntryType>(static_cast<uint8_t>(slot[kSlotTypeOff]));
-    result.handle.file_id = decode_fixed_32(slot + kSlotFileIdOff);
+    result.handle.file_id = decode_fixed_32(slot + kSlotFileOrBlockOffsetOff);
     result.handle.size = decode_fixed_32(slot + kSlotSizeOff);
-    result.handle.offset = decode_fixed_64(slot + kSlotGlobalOffsetOff);
+    result.handle.data_offset = decode_fixed_32(slot + kSlotDataOffsetOff);
     result.timestamp = decode_fixed_64(payload + sizeof(uint16_t) + key_len);
     return result;
 }
@@ -180,9 +180,9 @@ bool IndexBlockReader::decode_value(std::string_view value, ValueHandle *handle,
         handle->type = static_cast<EntryType>(static_cast<uint8_t>(p[0]));
         handle->file_id = decode_fixed_32(p + 1);
         handle->size = decode_fixed_32(p + 1 + sizeof(uint32_t));
-        handle->offset = decode_fixed_64(p + 1 + 2 * sizeof(uint32_t));
+        handle->data_offset = decode_fixed_32(p + 1 + 2 * sizeof(uint32_t));
     }
-    if (timestamp != nullptr) { *timestamp = decode_fixed_64(p + 1 + 2 * sizeof(uint32_t) + sizeof(uint64_t)); }
+    if (timestamp != nullptr) { *timestamp = decode_fixed_64(p + 1 + 3 * sizeof(uint32_t)); }
     return true;
 }
 
@@ -247,8 +247,8 @@ class IndexBlockIter : public Iterator {
             value_buf_[0] = static_cast<char>(static_cast<uint8_t>(current.handle.type));
             encode_fixed_32(value_buf_ + 1, current.handle.file_id);
             encode_fixed_32(value_buf_ + 1 + sizeof(uint32_t), current.handle.size);
-            encode_fixed_64(value_buf_ + 1 + 2 * sizeof(uint32_t), current.handle.offset);
-            encode_fixed_64(value_buf_ + 1 + 2 * sizeof(uint32_t) + sizeof(uint64_t), current.timestamp);
+            encode_fixed_32(value_buf_ + 1 + 2 * sizeof(uint32_t), current.handle.data_offset);
+            encode_fixed_64(value_buf_ + 1 + 3 * sizeof(uint32_t), current.timestamp);
             value_ = std::string_view(value_buf_, kIndexValueSize);
         } else {
             key_ = std::string_view();

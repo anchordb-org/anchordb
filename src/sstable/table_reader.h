@@ -21,6 +21,8 @@
 #include "anchordb/filter.h"
 #include "anchordb/status.h"
 #include "db/db_format.h"
+#include "sstable/block_cache.h"
+#include "sstable/data_block.h"
 #include "sstable/filter.h"
 #include "sstable/index_block.h"
 #include "sstable/summary.h"
@@ -51,9 +53,15 @@ class EntryIterator;
 //   3. That block is read through RandomAccessFileReader, decompressed when the
 //      table uses an active compressor, and parsed by IndexBlockReader.
 //   4. The index slot's ValueHandle selects the payload:
-//        Inline    read the data record from -Data.adb and expose it
-//        Tombstone read the tombstone from -Data.adb and expose it
+//        Inline    resolve the data block through the block cache and expose
+//                  the record
+//        Tombstone resolve it the same way and expose the tombstone
 //        Blob      return the vLog handle without reading the vLog
+//
+// -Data.adb blocks are read, decompressed and parsed by BlockCache, which
+// retains decompressed blocks when a shared Cache is supplied.  Point reads and
+// iterators share that resolution path, so a block is loaded and parsed at most
+// once while it is resident.
 //
 // The reader performs no vLog I/O.  The DB layer resolves blob handles through
 // its BlobResolver, so all tables share one resolution path and one pool of open
@@ -69,8 +77,12 @@ class TableReader {
     // the DB/orchestrator layer from Options.  On success stores a
     // heap-allocated reader in *result; the caller owns it.  On failure returns
     // a non-ok Status and leaves *result untouched.
+    // `block_cache` is a shared Cache (Options::block_cache) used to retain
+    // decompressed -Data.adb blocks.  It is borrowed and must be non-null; a
+    // zero-capacity cache disables retention while keeping the same ownership
+    // contract.
     static Status open(Env *env, const Comparator &comparator, const Compressor &compressor, const Filter &filter,
-                       const TableFileSet &files, TableReader **result);
+                       const TableFileSet &files, TableReader **result, Cache *block_cache);
 
     ~TableReader();
 
@@ -112,7 +124,7 @@ class TableReader {
   private:
     friend class TableIterator;
 
-    TableReader() = default;
+    explicit TableReader(Cache *block_cache) : block_cache_(block_cache) {}
 
     // Opens the data/index files, loads and parses the summary, and loads the
     // optional filter.
@@ -123,6 +135,14 @@ class TableReader {
     // *stored_buf or *plain_buf, whichever holds the parseable block.
     Status read_index_block_(uint64_t block_offset, uint32_t compressed_size, std::string *stored_buf,
                              std::string *plain_buf, std::string_view *out) const;
+
+    // Resolves an inline/tombstone slot through the block cache: loads and
+    // parses its data block, finds the record at handle.data_offset, and
+    // validates its key and type.  On success `*pin` owns the block and
+    // `*entry_out` points into it; the caller must not use either after the pin
+    // is released.
+    Status resolve_inline_(const ValueHandle &handle, std::string_view expected_key, Cache::Handle *pin,
+                           const DataBlockEntry **entry_out) const;
 
     // Reads and validates the inline/tombstone data record selected by
     // `handle`, exposing its value bytes through *value.  The view points into
@@ -156,6 +176,12 @@ class TableReader {
     uint64_t index_file_size_ = 0;
     uint64_t data_file_size_ = 0;
     size_t block_size_ = 0;
+
+    // Codec for framed -Data.adb blocks, recovered from the summary.
+    Compressor data_compressor_;
+
+    // Shared (borrowed) data-block cache.
+    BlockCache block_cache_;
 };
 
 } // namespace ANCHORDB_NAMESPACE

@@ -24,13 +24,26 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-// Classifies a stored entry across the memtable, data records, and index
-// blocks.  The numeric values are stable: every record carries the type in a
-// dedicated byte, while blob marks a value stored in the vLog.
+// Classifies a stored entry across the memtable, data records, index blocks,
+// and vLog records.  The numeric values are stable: every record carries the
+// type in a dedicated byte.
+//
+// Tombstone, Inline, and Blob describe the storage layer's view: memtable
+// entries, -Data.adb records, and SSTable index slots use only these.  A Blob
+// entry's value bytes are an encoded BlobHandle that addresses an uncompressed
+// record in the vLog.
+//
+// Compressed is vLog-only: the record is a blob whose value bytes are a
+// compressed payload.  The codec is identified by the vLog file header, so a
+// single file uses one codec; the writer falls back to Blob whenever
+// compression would not shrink a value.  Tombstones and inline values are never
+// compressed.  A Compressed type must never reach the memtable, -Data.adb, or
+// an SSTable index slot.
 enum class EntryType : uint8_t {
     Tombstone = 0x0,
     Inline = 0x1,
     Blob = 0x2,
+    Compressed = 0x3,
 };
 
 // Default upper bound on a stored user key.  Components that accept keys
@@ -38,10 +51,14 @@ enum class EntryType : uint8_t {
 // limit derived from their configuration when it is smaller.
 inline constexpr size_t kDefaultMaxKeySize = 4096; // 4KB
 
-// True when `type` is one of the three defined EntryType values.
+// True when `type` is one of the defined EntryType values.
 inline bool is_valid_entry_type(EntryType type) {
-    return static_cast<uint8_t>(type) <= static_cast<uint8_t>(EntryType::Blob);
+    return static_cast<uint8_t>(type) <= static_cast<uint8_t>(EntryType::Compressed);
 }
+
+// True when `type` denotes a blob payload, compressed or not.  Both kinds are
+// addressed by the same BlobHandle and resolved through the vLog.
+inline bool is_vlog_blob_type(EntryType type) { return type == EntryType::Blob || type == EntryType::Compressed; }
 
 // A reference to an encoded record in a WiscKey value-log file.  The DB layer
 // writes values larger than the configured threshold to the vLog and stores an
@@ -49,7 +66,9 @@ inline bool is_valid_entry_type(EntryType type) {
 // the handle as given, the SSTable index carries it in its slot, and the DB
 // read path resolves it.  `offset` and `size` address the whole encoded record
 // (header included), so a reader can fetch exactly those bytes and decode them
-// with RecordBufferReader.
+// with RecordBufferReader.  The referenced vLog record is either Blob
+// (verbatim value) or Compressed (payload compressed with the codec named by
+// the vLog file header); the handle is identical for both.
 struct BlobHandle {
     uint32_t file_id = 0;
     uint32_t size = 0;

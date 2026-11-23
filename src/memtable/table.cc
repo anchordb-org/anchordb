@@ -81,6 +81,11 @@ MemtableEntry MemTable::RawIterator::entry() const {
 
 Status MemTable::add(uint64_t timestamp, EntryType type, std::string_view key, std::string_view value) {
     if (!is_valid_entry_type(type)) { return Status::invalid_argument("memtable: invalid entry type"); }
+    // Compression applies to vLog records only; a memtable entry stores the
+    // logical Blob handle and never the vLog record's storage type.
+    if (type == EntryType::Compressed) {
+        return Status::invalid_argument("memtable: compressed entries are vlog-only");
+    }
     if (key.size() > max_key_size_) { return Status::invalid_argument("memtable: key too large"); }
 
     // A blob entry's value is an encoded BlobHandle supplied by the caller (the

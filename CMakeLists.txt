@@ -97,7 +97,10 @@ target_sources(anchordb
         src/db/resolving_iterator.h
         src/db/resolving_iterator.cc
         src/cache/cache.cc
+        src/cache/cache_key.h
         src/cache/cache_wrapper.h
+        src/cache/key_index.h
+        src/cache/sharded_cache.h
         src/cache/util.h
         src/cache/lru.h
         src/cache/lru.cc
@@ -117,6 +120,10 @@ target_sources(anchordb
         src/port/port.h
         src/port/port_thread.h
         src/port/port_stdcxx.h
+        src/sstable/data_block.h
+        src/sstable/data_block.cc
+        src/sstable/block_cache.h
+        src/sstable/block_cache.cc
         src/sstable/data_record.h
         src/sstable/data_record.cc
         src/sstable/filter.cc

@@ -15,6 +15,7 @@
 #pragma once
 
 #include "anchordb/anchordb_namespace.h"
+#include "anchordb/options.h"
 #include "anchordb/status.h"
 #include "db/vlog_reader_cache.h"
 #include <cstddef>
@@ -45,8 +46,10 @@ class Env;
 class BlobResolver {
   public:
     // Takes ownership of `cache`; it must be non-null until destruction.
-    // `db_dir` prefixes the numbered vLog file names.
-    BlobResolver(Env *env, std::string db_dir, Cache *cache);
+    // `db_dir` prefixes the numbered vLog file names.  `max_vlog_value_size`
+    // rejects a resolved blob larger than this before allocating it (0
+    // disables the limit); wire it from Options::max_vlog_value_size.
+    BlobResolver(Env *env, std::string db_dir, Cache *cache, size_t max_vlog_value_size = kDefaultMaxVLogValueSize);
 
     BlobResolver(const BlobResolver &) = delete;
     BlobResolver &operator=(const BlobResolver &) = delete;
@@ -69,6 +72,9 @@ class BlobResolver {
   private:
     Env *env_;
     std::string db_dir_;
+    // Ceiling on a resolved blob's size (decompressed for Compressed records);
+    // zero means unlimited.
+    size_t max_vlog_value_size_ = kDefaultMaxVLogValueSize;
     // Mutable so resolve() can populate the reader pool from a const resolver;
     // VLogReaderCache is internally synchronized.
     mutable VLogReaderCache readers_;

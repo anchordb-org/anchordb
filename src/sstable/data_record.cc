@@ -47,7 +47,7 @@ size_t encode_data_record(std::string *dst, uint64_t timestamp, std::string_view
                           EntryType type) {
     assert(dst != nullptr);
     assert(key.size() <= kDataRecordMaxKeySize);
-    assert(static_cast<uint8_t>(type) <= static_cast<uint8_t>(EntryType::Blob));
+    assert(is_valid_entry_type(type));
 
     const size_t start = dst->size();
 
@@ -91,7 +91,7 @@ Status decode_data_record(std::string_view *input, ParsedDataRecord *result) {
 
     const uint8_t type_byte = static_cast<uint8_t>(cursor[0]);
     cursor.remove_prefix(sizeof(uint8_t));
-    if (type_byte > static_cast<uint8_t>(EntryType::Blob)) {
+    if (type_byte > static_cast<uint8_t>(EntryType::Compressed)) {
         return Status::corruption("data record invalid entry type");
     }
 
@@ -137,6 +137,34 @@ Status decode_data_record(std::string_view input, ParsedDataRecord *result) {
     return Status::ok();
 }
 
+void append_vlog_file_header(std::string *dst, uint32_t codec_id) {
+    assert(dst != nullptr);
+    const size_t start = dst->size();
+    put_fixed_32(dst, kVLogFileMagic);
+    put_fixed_32(dst, kVLogFileFormatVersion);
+    put_fixed_32(dst, codec_id);
+    const uint32_t crc = mask(value(dst->data() + start, 3 * sizeof(uint32_t)));
+    put_fixed_32(dst, crc);
+}
+
+Status parse_vlog_file_header(std::string_view header, uint32_t *codec_id, uint32_t *version) {
+    if (header.size() < kVLogFileHeaderSize) {
+        return Status::corruption("vlog header truncated", std::to_string(header.size()));
+    }
+    if (decode_fixed_32(header.data()) != kVLogFileMagic) { return Status::corruption("vlog header magic mismatch"); }
+    const uint32_t stored_version = decode_fixed_32(header.data() + sizeof(uint32_t));
+    if (stored_version != kVLogFileFormatVersion) {
+        return Status::corruption("vlog header unsupported version", std::to_string(stored_version));
+    }
+    const uint32_t stored_crc = decode_fixed_32(header.data() + 3 * sizeof(uint32_t));
+    const uint32_t computed_crc = mask(value(header.data(), 3 * sizeof(uint32_t)));
+    if (stored_crc != computed_crc) { return Status::corruption("vlog header crc mismatch"); }
+
+    if (codec_id != nullptr) { *codec_id = decode_fixed_32(header.data() + 2 * sizeof(uint32_t)); }
+    if (version != nullptr) { *version = stored_version; }
+    return Status::ok();
+}
+
 namespace {
 
 // A record's location is stored as a uint32_t size, so reject anything larger
@@ -150,18 +178,41 @@ Status check_record_size(size_t record_len) {
 
 } // namespace
 
-DataRecordWriter::DataRecordWriter(WritableFileWriter *dest, uint64_t initial_size, uint64_t seal_size)
-    : dest_(dest), size_(initial_size), seal_size_(seal_size) {}
+DataRecordWriter::DataRecordWriter(WritableFileWriter *dest, uint64_t initial_size, uint64_t seal_size,
+                                   Compressor compressor, int compression_level, size_t compression_min_size)
+    : dest_(dest), size_(initial_size), seal_size_(seal_size), compressor_(compressor),
+      compression_level_(compression_level), compression_min_size_(compression_min_size) {}
 
 Status DataRecordWriter::add(std::string_view key, std::string_view value_bytes, EntryType type, uint64_t timestamp,
                              DataRecordLocation *out) {
     if (!status_.is_ok()) { return status_; }
     if (dest_ == nullptr) { return Status::invalid_argument("record_writer: null destination"); }
-    if (static_cast<uint8_t>(type) > static_cast<uint8_t>(EntryType::Blob)) {
-        return Status::invalid_argument("record_writer: invalid entry type");
-    }
+    if (!is_valid_entry_type(type)) { return Status::invalid_argument("record_writer: invalid entry type"); }
     if (key.size() > kDataRecordMaxKeySize) {
         return Status::invalid_argument("record_writer: key too large", std::to_string(key.size()));
+    }
+
+    // A compressed record is still a blob on disk; compression is attempted
+    // only when a codec is configured and the value is large enough.  If the
+    // result would not be smaller, the record falls back to an ordinary Blob
+    // so incompressible payloads never grow.
+    std::string compressed;
+    if (type == EntryType::Compressed) {
+        if (compressor_.compress == nullptr || compressor_.get_uncompressed_length == nullptr || compressor_.id == 0) {
+            return Status::invalid_argument("record_writer: compressed entry requires a vlog compressor");
+        }
+        if (value_bytes.size() >= compression_min_size_ && !value_bytes.empty()) {
+            if (!compressor_.compress(value_bytes.data(), value_bytes.size(), &compressed, compression_level_)) {
+                return Status::io_error(std::string_view("record_writer: value compression failed"));
+            }
+            if (compressed.size() < value_bytes.size()) {
+                value_bytes = compressed;
+            } else {
+                type = EntryType::Blob;
+            }
+        } else {
+            type = EntryType::Blob;
+        }
     }
 
     const size_t record_len = data_record_encoded_len(key.size(), value_bytes.size());
@@ -180,6 +231,15 @@ Status DataRecordWriter::append(std::string_view encoded_record, DataRecordLocat
 
     Status s = check_record_size(encoded_record.size());
     if (!s.is_ok()) { return s; }
+
+    // -Data.adb and the vLog are both addressed with 32-bit-derived locations,
+    // so refuse an append that would grow the file past kMaxRecordFileSize
+    // before any bytes reach the file.  A logical rejection does not poison the
+    // writer.
+    if (!record_file_fits(size_, encoded_record.size())) {
+        return Status::invalid_argument("record_writer: append would exceed the 4 GiB file size limit",
+                                        std::to_string(size_));
+    }
 
     s = dest_->append(encoded_record);
     if (!s.is_ok()) {
@@ -279,7 +339,9 @@ Status DataRecordReader::next(ParsedDataRecord *result) {
     Status s = read_exact_(kDataRecordHeaderSize);
     if (!s.is_ok()) { return s; }
     const uint8_t type = static_cast<uint8_t>(buffer_[kDataRecordHeaderSize - 1]);
-    if (type > static_cast<uint8_t>(EntryType::Blob)) { return Status::corruption("data record invalid entry type"); }
+    if (type > static_cast<uint8_t>(EntryType::Compressed)) {
+        return Status::corruption("data record invalid entry type");
+    }
 
     // key_size (uint16_t) | key bytes.
     s = read_exact_(kDataRecordKeySizeSize);

@@ -26,6 +26,13 @@ namespace ANCHORDB_NAMESPACE {
 
 namespace {
 
+// Stable on-disk ids.  A codec that is compiled out must not claim an id, so
+// the constructors only return these ids when the library is available.
+inline constexpr uint32_t kSnappyCompressorId = 0x1001;
+inline constexpr uint32_t kZstdCompressorId = 0x2001;
+inline constexpr uint32_t kLz4CompressorId = 0x3001;
+inline constexpr uint32_t kZlibCompressorId = 0x4001;
+
 #if HAS_ZSTD
 bool zstd_get_uncompressed_length(const char *input, size_t length, size_t *result) {
     unsigned long long size = ZSTD_getFrameContentSize(input, length);
@@ -247,7 +254,7 @@ bool zlib_uncompress(const char *input, size_t length, char *output) {
 // zero id, so a table written by it records "uncompressed" and stays readable.
 Compressor new_snappy_compressor() {
 #if HAS_SNAPPY
-    return Compressor{0x1001, &snappy_compress, &snappy_uncompress, &get_snappy_uncompressed_length};
+    return Compressor{kSnappyCompressorId, &snappy_compress, &snappy_uncompress, &get_snappy_uncompressed_length};
 #else
     return Compressor{};
 #endif
@@ -255,7 +262,7 @@ Compressor new_snappy_compressor() {
 
 Compressor new_zstd_compressor() {
 #if HAS_ZSTD
-    return Compressor{0x2001, &zstd_compress, &zstd_uncompress, &get_zstd_uncompressed_length};
+    return Compressor{kZstdCompressorId, &zstd_compress, &zstd_uncompress, &get_zstd_uncompressed_length};
 #else
     return Compressor{};
 #endif
@@ -263,7 +270,7 @@ Compressor new_zstd_compressor() {
 
 Compressor new_lz4_compressor() {
 #if HAS_LZ4
-    return Compressor{0x3001, &lz4_compress, &lz4_uncompress, &lz4_get_uncompressed_length};
+    return Compressor{kLz4CompressorId, &lz4_compress, &lz4_uncompress, &lz4_get_uncompressed_length};
 #else
     return Compressor{};
 #endif
@@ -271,7 +278,7 @@ Compressor new_lz4_compressor() {
 
 Compressor new_zlib_compressor() {
 #if HAS_ZLIB
-    return Compressor{0x4001, &zlib_compress, &zlib_uncompress, &zlib_get_uncompressed_length};
+    return Compressor{kZlibCompressorId, &zlib_compress, &zlib_uncompress, &zlib_get_uncompressed_length};
 #else
     return Compressor{};
 #endif
@@ -284,6 +291,16 @@ Compressor new_compressor(CompressionType type) {
     case CompressionType::Lz4: return new_lz4_compressor();
     case CompressionType::Zlib: return new_zlib_compressor();
     case CompressionType::None:
+    default: return Compressor{0x0, nullptr, nullptr, nullptr};
+    }
+}
+
+Compressor new_compressor_by_id(uint32_t id) {
+    switch (id) {
+    case kSnappyCompressorId: return new_snappy_compressor();
+    case kZstdCompressorId: return new_zstd_compressor();
+    case kLz4CompressorId: return new_lz4_compressor();
+    case kZlibCompressorId: return new_zlib_compressor();
     default: return Compressor{0x0, nullptr, nullptr, nullptr};
     }
 }

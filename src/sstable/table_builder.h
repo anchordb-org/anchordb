@@ -21,6 +21,7 @@
 #include "anchordb/status.h"
 #include "db/db_format.h"
 #include "file/file_meta.h"
+#include "sstable/data_block.h"
 #include "sstable/data_record.h"
 #include "sstable/filter.h"
 #include "sstable/index_block.h"
@@ -30,6 +31,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace ANCHORDB_NAMESPACE {
 
@@ -38,7 +40,7 @@ class WritableFileWriter;
 
 // Orchestrates the four files that make up one SSTable:
 //
-//   -Data.adb     inline and tombstone records, written through DataRecordWriter
+//   -Data.adb     whole-record DataBlockBuilder segments, compressed and framed
 //   -Index.adb    IndexBlockBuilder segments, sealed as each one fills
 //   -Summary.adb  one entry per index block (greatest key, offset, stored size)
 //   -Filter.adb   per-table filter built from the accepted user keys
@@ -48,8 +50,9 @@ class WritableFileWriter;
 // version first).  add() enforces this and returns Status::invalid_argument
 // when it is violated.
 //
-// Inline and tombstone entries are encoded into -Data.adb and the resulting
-// record location becomes the entry's index handle.  Blob entries are not
+// Inline and tombstone entries are buffered into the current data block and
+// become, together with the block's location, the index handle
+// (block_offset, stored_block_size, in_block_offset).  Blob entries are not
 // written to -Data.adb at all: the DB layer has already stored the value in the
 // vLog and supplies a BlobHandle (file id, record offset, record size).
 // TableBuilder writes that record-level handle into the index slot and never
@@ -63,8 +66,8 @@ class WritableFileWriter;
 // place) is the caller's responsibility; if the builder fails or is destroyed
 // before finish() succeeds, abort() closes and removes the partial files.
 //
-// File-operation errors are sticky, like DataRecordWriter: once status() is
-// non-ok, add() and finish() keep returning it.  Logical rejections (ordering
+// File-operation errors are sticky: once status() is non-ok, add() and
+// finish() keep returning it.  Logical rejections (ordering
 // violations, oversized keys) do not poison the builder.
 class TableBuilder {
   public:
@@ -76,7 +79,8 @@ class TableBuilder {
     // -Filter.adb.  Check status() after construction; a failed open leaves the
     // builder unusable.  The DB/orchestrator layer derives these from Options.
     TableBuilder(Env *env, const TableFileSet &files, const Comparator &comparator, const Compressor &compressor,
-                 int compression_level, size_t block_size, size_t max_key_size, const Filter &filter,
+                 int compression_level, size_t block_size, const Compressor &data_compressor,
+                 int data_compression_level, size_t data_block_size, size_t max_key_size, const Filter &filter,
                  size_t writable_file_buf_size = kWritableFileBufSize);
 
     ~TableBuilder();
@@ -85,10 +89,12 @@ class TableBuilder {
     TableBuilder &operator=(const TableBuilder &) = delete;
 
     // Appends one entry.  For Inline and Tombstone, `value` is the raw value
-    // bytes and is encoded into -Data.adb (a tombstone normally has an empty
-    // value, which readers ignore).  For Blob, `value` is the memtable's
-    // encoded BlobHandle and only the index slot is written: the data file
-    // never holds a blob value or a blob handle.
+    // bytes and is encoded into the current whole-record data block; the block
+    // is compressed and appended to -Data.adb when it fills.  For Blob, `value`
+    // is the memtable's encoded BlobHandle and only the index slot is written:
+    // the data file never holds a blob value or a blob handle.  A Blob entry
+    // flushes the pending data block first so index entries stay in key order.
+    // EntryType::Compressed is a vLog record type and is rejected here.
     Status add(std::string_view key, std::string_view value, EntryType type, uint64_t timestamp);
 
     // Appends one blob entry from an already-decoded BlobHandle.  The handle's
@@ -96,8 +102,9 @@ class TableBuilder {
     // Only the index entry is written.
     Status add_blob(std::string_view key, const BlobHandle &handle, uint64_t timestamp);
 
-    // Seals the trailing index block, syncs the data and index streams, writes
-    // -Summary.adb and -Filter.adb, and closes all files.  Idempotent on success.
+    // Flushes the trailing data block, seals the trailing index block, syncs the
+    // data and index streams, writes -Summary.adb and -Filter.adb, and closes
+    // all files.  Idempotent on success.
     Status finish();
 
     // Closes and removes every output file created so far.  A no-op after a
@@ -115,7 +122,7 @@ class TableBuilder {
     // Number of index blocks sealed and written to -Index.adb.
     size_t block_count() const { return block_count_; }
 
-    // Bytes written to -Data.adb (inline/tombstone records only).
+    // Bytes written to -Data.adb (framed data blocks).
     uint64_t data_size() const { return data_size_; }
     // Bytes written to -Index.adb (stored, possibly compressed, block segments).
     uint64_t index_size() const { return index_size_; }
@@ -141,8 +148,16 @@ class TableBuilder {
     Status check_addable_(std::string_view key, uint64_t timestamp) const;
 
     // Appends one entry to the index, sealing the current block first when it
-    // is full, and records the entry in the filter and summary bookkeeping.
+    // is full.  Filter/summary bookkeeping happens at add() time.
     Status append_index_(std::string_view key, const ValueHandle &handle, uint64_t timestamp);
+
+    // Compresses and appends the current data block (with its length header),
+    // then appends every pending index entry that points into it.
+    Status flush_data_block_();
+
+    // Records an accepted key for ordering, filter, size accounting and the
+    // key/timestamp range.
+    void note_key_(std::string_view key, uint64_t timestamp);
 
     // Seals the current (non-empty) block, optionally compresses it, records it
     // in the summary and appends it to -Index.adb.
@@ -158,20 +173,33 @@ class TableBuilder {
     Comparator comparator_;
     Compressor compressor_;
     int compression_level_ = 0;
+    Compressor data_compressor_;
+    int data_compression_level_ = 0;
     IndexBlockBuilder block_writer_;
+    DataBlockBuilder data_block_;
     SummaryBuilder summary_;
     FilterBuilder filter_builder_;
 
+    // One buffered inline/tombstone entry waiting for its data block to be
+    // appended.  Keys are copied because the memtable view is not stable.
+    struct PendingEntry {
+        std::string key;
+        EntryType type = EntryType::Inline;
+        uint64_t timestamp = 0;
+        uint32_t in_block_offset = 0;
+    };
+    std::vector<PendingEntry> pending_;
+
     Env *env_ = nullptr;
     TableFileSet files_;
-    // Owned output streams.  data_writer_ wraps data_file_ but does not own it,
-    // so it is deleted first.
+    // Owned output streams.
     WritableFileWriter *data_file_ = nullptr;
     WritableFileWriter *index_file_ = nullptr;
-    DataRecordWriter *data_writer_ = nullptr;
 
-    // Scratch buffer holding the compressed form of the block being emitted.
+    // Scratch buffers for the block being emitted.
     std::string compressed_block_;
+    std::string compressed_data_block_;
+    std::string data_block_frame_;
 
     // Last accepted key/timestamp, used to enforce index ordering.  Only
     // meaningful once entry_count_ > 0 (an empty key is a legal key).

@@ -139,7 +139,7 @@ std::string_view ResolvingIterator::value() const {
         return std::string_view();
     }
 
-    if (ref.type == EntryType::Blob) {
+    if (is_vlog_blob_type(ref.type)) {
         if (resolver_ == nullptr) {
             status_ = Status::not_supported("resolving iterator: no blob resolver");
             valid_ = false;

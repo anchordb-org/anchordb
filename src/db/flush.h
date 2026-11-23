@@ -53,7 +53,8 @@ class FlushJob {
     // `memtable` is borrowed and must outlive the job and any call to run().
     FlushJob(Env *env, std::string dbname, uint64_t table_number, const MemTable &memtable,
              const Comparator &comparator, const Compressor &compressor, int compression_level, size_t block_size,
-             size_t max_key_size, const Filter &filter);
+             const Compressor &data_compressor, int data_compression_level, size_t data_block_size, size_t max_key_size,
+             const Filter &filter);
 
     FlushJob(const FlushJob &) = delete;
     FlushJob &operator=(const FlushJob &) = delete;
@@ -72,6 +73,9 @@ class FlushJob {
     Compressor compressor_;
     int compression_level_;
     size_t block_size_;
+    Compressor data_compressor_;
+    int data_compression_level_;
+    size_t data_block_size_;
     size_t max_key_size_;
     Filter filter_;
 };

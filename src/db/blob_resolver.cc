@@ -28,8 +28,8 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-BlobResolver::BlobResolver(Env *env, std::string db_dir, Cache *cache)
-    : env_(env), db_dir_(std::move(db_dir)), readers_(env, cache) {}
+BlobResolver::BlobResolver(Env *env, std::string db_dir, Cache *cache, size_t max_vlog_value_size)
+    : env_(env), db_dir_(std::move(db_dir)), max_vlog_value_size_(max_vlog_value_size), readers_(env, cache) {}
 
 Status BlobResolver::resolve(const BlobHandle &handle, std::string_view expected_key, std::string *value,
                              std::string *scratch) const {
@@ -50,17 +50,17 @@ Status BlobResolver::resolve(const BlobHandle &handle, std::string_view expected
         return Status::corruption("blob resolver: vlog record out of range", std::to_string(handle.offset));
     }
 
-    Cache::PinnedHandle pin;
-    s = readers_.open(filename, &pin);
+    Cache::Handle pin;
+    s = readers_.acquire(filename, &pin);
     if (!s.is_ok()) { return s; }
 
-    auto *reader = static_cast<RandomAccessFileReader *>(pin.value());
+    auto *file = static_cast<VLogFile *>(pin.value());
     std::string local_scratch;
     std::string *buf = scratch != nullptr ? scratch : &local_scratch;
     buf->resize(handle.size);
 
     std::string_view view;
-    s = reader->read(handle.offset, handle.size, &view, buf->data());
+    s = file->reader->read(handle.offset, handle.size, &view, buf->data());
     if (!s.is_ok()) { return s; }
     if (view.size() < handle.size) {
         return Status::corruption("blob resolver: vlog record short read", std::to_string(view.size()));
@@ -74,10 +74,46 @@ Status BlobResolver::resolve(const BlobHandle &handle, std::string_view expected
     if (!s.is_ok()) { return s; }
     if (done) { return Status::corruption("blob resolver: vlog record missing"); }
     if (!record_reader.done()) { return Status::corruption("blob resolver: vlog record has trailing bytes"); }
-    if (!record.is_blob()) { return Status::corruption("blob resolver: vlog record is not a blob"); }
+    if (!record.is_vlog_blob()) { return Status::corruption("blob resolver: vlog record is not a blob"); }
     if (record.key != expected_key) { return Status::corruption("blob resolver: vlog record key mismatch"); }
 
-    value->assign(record.value.data(), record.value.size());
+    if (!record.is_compressed()) {
+        if (max_vlog_value_size_ != 0 && record.value.size() > max_vlog_value_size_) {
+            return Status::corruption("blob resolver: vlog value exceeds size limit",
+                                      std::to_string(record.value.size()));
+        }
+        value->assign(record.value.data(), record.value.size());
+        return Status::ok();
+    }
+
+    // The codec comes from the vLog file header, which is cached with the open
+    // file, so this path never re-reads the header.
+    if (file->codec_id == 0 || file->compressor.get_uncompressed_length == nullptr ||
+        file->compressor.uncompress == nullptr) {
+        return Status::corruption("blob resolver: compressed vlog record without a codec");
+    }
+
+    size_t uncompressed_size = 0;
+    if (!file->compressor.get_uncompressed_length(record.value.data(), record.value.size(), &uncompressed_size)) {
+        return Status::corruption("blob resolver: invalid compressed vlog record");
+    }
+    // A vLog record is addressed by a uint32_t size, so a decompressed value
+    // that cannot fit that bound is corrupt.
+    if (uncompressed_size > UINT32_MAX) {
+        return Status::corruption("blob resolver: decompressed vlog record too large",
+                                  std::to_string(uncompressed_size));
+    }
+    // Reject an implausible decompressed length before allocating; a corrupt
+    // codec header can claim a size far larger than the stored record.
+    if (max_vlog_value_size_ != 0 && uncompressed_size > max_vlog_value_size_) {
+        return Status::corruption("blob resolver: decompressed vlog value exceeds size limit",
+                                  std::to_string(uncompressed_size));
+    }
+    value->resize(uncompressed_size);
+    if (uncompressed_size != 0 &&
+        !file->compressor.uncompress(record.value.data(), record.value.size(), value->data())) {
+        return Status::corruption("blob resolver: vlog record decompression failed");
+    }
     return Status::ok();
 }
 

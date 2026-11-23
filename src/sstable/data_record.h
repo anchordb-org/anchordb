@@ -15,6 +15,7 @@
 #pragma once
 
 #include "anchordb/anchordb_namespace.h"
+#include "anchordb/compressor.h"
 #include "anchordb/status.h"
 #include "db/db_format.h"
 #include <cstddef>
@@ -70,6 +71,44 @@ inline constexpr size_t kDataRecordKeySizeSize = sizeof(uint16_t); // 2
 // decoder reports one as corruption.
 inline constexpr size_t kDataRecordMaxKeySize = UINT16_MAX;
 
+// Largest size of one record file, shared by -Data.adb and the vLog.  An inline
+// index slot stores the absolute data-block offset in a 32-bit field, and a
+// blob slot stores the absolute vLog record offset in a 32-bit field, so both
+// file kinds are hard-capped at 4 GiB.  Writers reject an append that would push
+// a file past this limit instead of truncating an address field.
+inline constexpr uint64_t kMaxRecordFileSize = uint64_t{1} << 32; // 4 GiB
+
+// True when appending `len` more bytes to a file whose current size is
+// `current_size` keeps it within kMaxRecordFileSize.  Written as a subtraction
+// so the check cannot overflow for an already-oversized current size.
+inline bool record_file_fits(uint64_t current_size, size_t len) {
+    return current_size <= kMaxRecordFileSize && static_cast<uint64_t>(len) <= kMaxRecordFileSize - current_size;
+}
+
+// --- vLog file header -------------------------------------------------------
+//
+// Every vLog file starts with a fixed header before its first record.  The
+// header identifies the codec used by EntryType::Compressed records in this
+// file, so a codec change in Options never makes an old vLog unreadable.  A
+// reader loads it once when it opens the file and caches the resolved codec.
+//
+// Layout (little-endian):
+//   | magic (4B) | version (4B) | codec_id (4B) | masked crc32 (4B) |
+// The CRC covers magic, version, and codec_id.  Blob records (verbatim values)
+// may coexist with Compressed records in the same file.
+inline constexpr uint32_t kVLogFileMagic = 0x4C564E41; // "ANVL" in little-endian
+inline constexpr uint32_t kVLogFileFormatVersion = 1;
+inline constexpr size_t kVLogFileHeaderSize = 4 * sizeof(uint32_t); // 16 bytes
+
+// Appends a vLog file header for `codec_id` (0 = blobs stored verbatim) to
+// *dst.
+void append_vlog_file_header(std::string *dst, uint32_t codec_id);
+
+// Parses exactly one vLog file header from the front of `header`, validating
+// the magic, version, and checksum.  On success stores the recorded codec id
+// and format version.  Returns a corruption status otherwise.
+Status parse_vlog_file_header(std::string_view header, uint32_t *codec_id, uint32_t *version);
+
 // A fully decoded record.  `key` and `value` are zero-copy views into the
 // buffer that was decoded and must not outlive it.
 struct ParsedDataRecord {
@@ -78,10 +117,13 @@ struct ParsedDataRecord {
     EntryType type = EntryType::Inline;
     uint64_t timestamp = 0;
 
-    // True when this record holds a large value that belongs in the vLog
-    // instead of inline in -Data.adb.  In a vLog record the value bytes are
-    // still in `value`; the index slot addresses the complete record.
+    // True when this record holds an uncompressed large value from the vLog.
     bool is_blob() const { return type == EntryType::Blob; }
+    // True when this is a vLog record whose `value` bytes are compressed.  The
+    // codec is the one named by the enclosing vLog file header.
+    bool is_compressed() const { return type == EntryType::Compressed; }
+    // True for either vLog record kind; both are addressed by a BlobHandle.
+    bool is_vlog_blob() const { return is_vlog_blob_type(type); }
     // True when this record marks a deleted key.
     bool is_deletion() const { return type == EntryType::Tombstone; }
 };
@@ -127,6 +169,15 @@ struct DataRecordLocation {
 // roll policy is left to the caller.  Destruction does not flush or close
 // `dest`; call flush(), sync() or close() explicitly.
 //
+// vLog compression: when a non-null `compressor` is supplied, add() accepts
+// EntryType::Compressed and compresses the value bytes with it.  The caller
+// must have written a vLog file header with the same codec id (see
+// append_vlog_file_header).  If the value is below compression_min_size, the
+// codec is disabled, or the compressed result is not smaller than the input,
+// add() stores an ordinary uncompressed EntryType::Blob record instead.  A
+// codec failure (compress() returning false) is reported as io_error.  -Data.adb
+// never uses Compressed, so its writer is constructed without a compressor.
+//
 // File-operation errors are sticky: once append(), flush(), sync() or close()
 // fails, later calls return the same Status without attempting further writes,
 // so a caller cannot unknowingly continue writing after a partial write.
@@ -140,15 +191,20 @@ class DataRecordWriter {
     // Pass 0 for a freshly created or truncated file; when `dest` is an
     // appendable writer for an existing file, pass that file's current size so
     // record locations continue at the real end of the file.  A `seal_size` of
-    // 0 disables sealing.
-    DataRecordWriter(WritableFileWriter *dest, uint64_t initial_size, uint64_t seal_size = 0);
+    // 0 disables sealing.  `compressor`, `compression_level`, and
+    // `compression_min_size` drive EntryType::Compressed records; pass a
+    // default Compressor for -Data.adb.
+    DataRecordWriter(WritableFileWriter *dest, uint64_t initial_size, uint64_t seal_size = 0,
+                     Compressor compressor = Compressor{}, int compression_level = 1, size_t compression_min_size = 0);
 
     DataRecordWriter(const DataRecordWriter &) = delete;
     DataRecordWriter &operator=(const DataRecordWriter &) = delete;
 
     // Encodes one record and appends it.  `value_bytes` is the raw value (for a
     // record written to the vLog, the blob payload).  The key limit and entry
-    // type are checked before anything is written.  On success fills *out (if
+    // type are checked before anything is written.  For
+    // EntryType::Compressed the value is compressed first and may be rewritten
+    // as EntryType::Blob (see the class comment).  On success fills *out (if
     // non-null) with the record's location.
     Status add(std::string_view key, std::string_view value_bytes, EntryType type, uint64_t timestamp,
                DataRecordLocation *out);
@@ -178,6 +234,9 @@ class DataRecordWriter {
     WritableFileWriter *dest_;
     uint64_t size_;
     uint64_t seal_size_;
+    Compressor compressor_;
+    int compression_level_;
+    size_t compression_min_size_;
     Status status_;
 };
 

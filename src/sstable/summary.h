@@ -25,10 +25,13 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-// Size of the summary header: the index-block segment size and the id of the
-// compressor used for every index block.  Written once at the start of
-// -Summary.adb.
-inline constexpr size_t kSummaryHeaderSize = 2 * sizeof(uint32_t); // 8 bytes
+// Summary format.  The header records the index-block and data-block format
+// settings; the version word exists for future format changes.
+inline constexpr uint32_t kSummaryMagic = 0x4D534E41; // "ANSM" in little-endian
+inline constexpr uint32_t kSummaryFormatVersion = 2;
+// magic | version | block_size | index_compressor_id | data_compressor_id |
+// data_block_size
+inline constexpr size_t kSummaryHeaderSize = 6 * sizeof(uint32_t); // 24 bytes
 
 // Fixed on-disk sizes of a summary index entry's non-key fields.
 inline constexpr size_t kSummaryKeyLenSize = sizeof(uint32_t);         // 4 bytes
@@ -50,23 +53,28 @@ struct SummaryEntry {
 // size.
 //
 // Buffer encoding (little-endian):
-//   | block_size (4B) | compressor_id (4B) | entry* |
+//   | magic (4B) | version (4B) | block_size (4B) | index_compressor_id (4B) |
+//   | data_compressor_id (4B) | data_block_size (4B) | entry* |
 // where each entry is:
 //   | key_len (4B) | key_bytes (key_len B) | block_offset (8B) |
 //   | compressed_size (4B) |
 //
-// The leading block_size header records the index-block segment size for the
-// whole table; compressor_id records the Compressor::id used to compress every
-// index block (0 = blocks stored verbatim).  Readers use it to reject a table
-// opened with a different codec. Entries must be added in ascending key order.
+// `block_size` records the uncompressed index-block segment size;
+// `index_compressor_id` records the codec for every index block (0 = verbatim).
+// `data_compressor_id` and `data_block_size` describe -Data.adb blocks: every
+// inline slot in this table addresses a framed data block, and the codec id is
+// 0 when those blocks are stored verbatim.  Entries must be added in ascending
+// key order.
 class SummaryBuilder {
   public:
     // `block_size` is the index-block segment size for the whole table;
     // `compressor_id` is the codec used for the index blocks (0 when they are
-    // stored verbatim).  Both are written as the summary header. `max_key_size`
-    // bounds the separator keys stored in the summary and must match the limit
-    // used for the corresponding index blocks.
-    explicit SummaryBuilder(uint32_t block_size, uint32_t compressor_id = 0, size_t max_key_size = kDefaultMaxKeySize);
+    // stored verbatim).  `data_compressor_id` and `data_block_size` describe the
+    // uncompressed -Data.adb block layout.  `max_key_size` bounds the separator
+    // keys stored in the summary and must match the limit used for the
+    // corresponding index blocks.
+    explicit SummaryBuilder(uint32_t block_size, uint32_t compressor_id, size_t max_key_size,
+                            uint32_t data_compressor_id, uint32_t data_block_size);
 
     SummaryBuilder(const SummaryBuilder &) = delete;
     SummaryBuilder &operator=(const SummaryBuilder &) = delete;
@@ -82,6 +90,12 @@ class SummaryBuilder {
 
     // Compressor id the index blocks were written with (0 = verbatim).
     uint32_t compressor_id() const { return compressor_id_; }
+
+    // Codec used for -Data.adb blocks (0 = verbatim).
+    uint32_t data_compressor_id() const { return data_compressor_id_; }
+
+    // Uncompressed target size of a -Data.adb block.
+    uint32_t data_block_size() const { return data_block_size_; }
 
     // Maximum accepted separator-key length in bytes.
     size_t max_key_size() const { return max_key_size_; }
@@ -108,6 +122,8 @@ class SummaryBuilder {
 
     uint32_t block_size_ = 0;
     uint32_t compressor_id_ = 0;
+    uint32_t data_compressor_id_ = 0;
+    uint32_t data_block_size_ = 0;
     size_t max_key_size_ = kDefaultMaxKeySize;
     std::string buffer_;
     size_t entry_count_ = 0;
@@ -134,6 +150,12 @@ class SummaryReader {
     // verbatim).  Only meaningful when valid() is true.
     uint32_t compressor_id() const { return compressor_id_; }
 
+    // Codec used for -Data.adb blocks (0 = verbatim).
+    uint32_t data_compressor_id() const { return data_compressor_id_; }
+
+    // Uncompressed target size of a -Data.adb block.
+    uint32_t data_block_size() const { return data_block_size_; }
+
     // Finds the block that may contain `target`: the first entry whose key is
     // >= target.  On success stores its absolute block offset and returns true;
     // returns false if the buffer is invalid or target is past the last block.
@@ -158,6 +180,8 @@ class SummaryReader {
     std::vector<SummaryEntry> entries_;
     uint32_t block_size_ = 0;
     uint32_t compressor_id_ = 0;
+    uint32_t data_compressor_id_ = 0;
+    uint32_t data_block_size_ = 0;
     bool valid_;
 };
 

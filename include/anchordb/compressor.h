@@ -66,4 +66,10 @@ Compressor ANCHORDB_EXPORT new_zlib_compressor();
 // CompressionType::None or a codec that was not built).
 Compressor ANCHORDB_EXPORT new_compressor(CompressionType type);
 
+// Returns the built-in compressor whose Compressor::id equals `id`, or a
+// disabled Compressor when the id is 0 or unknown (including a codec compiled
+// out of this build).  Readers use this to select the codec recorded in an
+// on-disk header instead of trusting the current Options.
+Compressor ANCHORDB_EXPORT new_compressor_by_id(uint32_t id);
+
 } // namespace ANCHORDB_NAMESPACE

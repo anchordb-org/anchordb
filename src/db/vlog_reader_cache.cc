@@ -16,6 +16,8 @@
 
 #include "anchordb/env.h"
 #include "anchordb/status.h"
+#include "sstable/data_record.h"
+#include <cstring>
 #include <string>
 #include <string_view>
 
@@ -23,20 +25,68 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-VLogReaderCache::VLogReaderCache(Env *env, Cache *cache) : env_(env), cache_(cache) {}
+VLogReaderCache::VLogReaderCache(Env *env, Cache *borrowed_cache_) : env_(env), cache_(borrowed_cache_) {}
 
-Status VLogReaderCache::open(std::string_view filename, Cache::PinnedHandle *pin) {
+Status VLogReaderCache::acquire(std::string_view filename, Cache::Handle *pin) {
     if (pin == nullptr) { return Status::invalid_argument("vlog reader cache: null pin"); }
     if (env_ == nullptr) { return Status::not_supported("vlog reader cache: no env"); }
     if (!cache_.valid()) { return Status::invalid_argument("vlog reader cache: no cache"); }
 
-    auto open = [this, filename](RandomAccessFileReader **out) {
-        return env_->new_random_access_file_reader(std::string(filename), out);
-    };
-    auto charge = [](RandomAccessFileReader *) { return kVLogReaderCacheCharge; };
+    auto open_file = [this, filename](VLogFile **out) -> Status {
+        if (out == nullptr) { return Status::invalid_argument("vlog reader cache: null output"); }
+        *out = nullptr;
 
-    return cache_lookup_or_open<RandomAccessFileReader>(cache_, filename, pin, /*value=*/nullptr, open, charge,
-                                                        &delete_entry);
+        const std::string name(filename);
+        uint64_t file_size = 0;
+        Status s = env_->get_file_size(name, &file_size);
+        if (!s.is_ok()) { return s; }
+        if (file_size < kVLogFileHeaderSize) {
+            return Status::corruption("vlog reader cache: file shorter than header", std::to_string(file_size));
+        }
+
+        RandomAccessFileReader *reader = nullptr;
+        s = env_->new_random_access_file_reader(name, &reader);
+        if (!s.is_ok()) { return s; }
+
+        std::string header;
+        header.resize(kVLogFileHeaderSize);
+        std::string_view view;
+        s = reader->read(0, kVLogFileHeaderSize, &view, header.data());
+        if (!s.is_ok()) {
+            delete reader;
+            return s;
+        }
+        if (view.size() < kVLogFileHeaderSize) {
+            delete reader;
+            return Status::corruption("vlog reader cache: short header read", std::to_string(view.size()));
+        }
+        if (view.data() != header.data()) { std::memmove(header.data(), view.data(), kVLogFileHeaderSize); }
+
+        uint32_t codec_id = 0;
+        uint32_t version = 0;
+        s = parse_vlog_file_header(std::string_view(header.data(), kVLogFileHeaderSize), &codec_id, &version);
+        if (!s.is_ok()) {
+            delete reader;
+            return s;
+        }
+
+        const Compressor compressor = new_compressor_by_id(codec_id);
+        if (codec_id != 0 && (compressor.uncompress == nullptr || compressor.get_uncompressed_length == nullptr)) {
+            delete reader;
+            return Status::corruption("vlog reader cache: unsupported compression codec", std::to_string(codec_id));
+        }
+
+        auto *file = new VLogFile();
+        file->reader = reader;
+        file->format_version = version;
+        file->codec_id = codec_id;
+        file->compressor = compressor;
+        *out = file;
+        return Status::ok();
+    };
+    auto charge = [](VLogFile *) { return kVLogReaderCacheCharge + sizeof(VLogFile); };
+
+    return cache_lookup_or_open<VLogFile>(cache_, filename, pin, /*value=*/nullptr, open_file, charge, &delete_entry);
 }
 
 void VLogReaderCache::erase(std::string_view filename) {
@@ -44,7 +94,9 @@ void VLogReaderCache::erase(std::string_view filename) {
 }
 
 void VLogReaderCache::delete_entry(std::string_view, void *value) {
-    delete static_cast<RandomAccessFileReader *>(value);
+    auto *file = static_cast<VLogFile *>(value);
+    delete file->reader;
+    delete file;
 }
 
 } // namespace ANCHORDB_NAMESPACE

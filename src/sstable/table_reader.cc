@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "sstable/table_reader.h"
 #include "anchordb/env.h"
 #include "db/entry_iterator.h"
-#include "sstable/data_record.h"
-#include "sstable/table_reader.h"
 #include <cassert>
 #include <cstring>
 #include <string>
@@ -53,17 +52,6 @@ Status read_exact(RandomAccessFileReader *reader, uint64_t offset, size_t n, std
     return Status::ok();
 }
 
-// Decodes exactly one complete record from `bytes`, rejecting trailing data.
-Status decode_single_record(std::string_view bytes, ParsedDataRecord *result) {
-    DataRecordBufferReader reader(bytes);
-    bool done = false;
-    Status s = reader.next(result, &done);
-    if (!s.is_ok()) { return s; }
-    if (done) { return Status::corruption("table reader: missing record"); }
-    if (!reader.done()) { return Status::corruption("table reader: trailing bytes after record"); }
-    return Status::ok();
-}
-
 } // namespace
 
 TableReader::~TableReader() {
@@ -84,11 +72,12 @@ size_t TableReader::cache_charge() const {
 }
 
 Status TableReader::open(Env *env, const Comparator &comparator, const Compressor &compressor, const Filter &filter,
-                         const TableFileSet &files, TableReader **result) {
+                         const TableFileSet &files, TableReader **result, Cache *block_cache) {
     if (result == nullptr) { return Status::invalid_argument("TableReader::open: null result"); }
     if (env == nullptr) { return Status::invalid_argument("TableReader::open: env is null"); }
+    if (block_cache == nullptr) { return Status::invalid_argument("TableReader::open: block cache is null"); }
 
-    TableReader *reader = new TableReader();
+    TableReader *reader = new TableReader(block_cache);
     reader->env_ = env;
     reader->comparator_ = comparator;
     if (reader->comparator_.compare == nullptr) { reader->comparator_ = new_byte_wise_comparator(); }
@@ -160,6 +149,20 @@ Status TableReader::init_(const TableFileSet &files) {
     // every entry maps inside -Index.adb before any read uses it.
     block_size_ = summary_->block_size();
     if (block_size_ == 0) { return Status::corruption("table reader: zero index block size"); }
+
+    // Every inline slot addresses a framed -Data.adb block:
+    // (block offset, stored block size, in-block record offset).
+    const uint32_t data_block_size = summary_->data_block_size();
+    if (data_block_size == 0 || data_block_size > kMaxDataBlockSize) {
+        return Status::corruption("table reader: invalid data block size", std::to_string(data_block_size));
+    }
+    const uint32_t data_compressor_id = summary_->data_compressor_id();
+    data_compressor_ = new_compressor_by_id(data_compressor_id);
+    if (data_compressor_id != 0 &&
+        (data_compressor_.uncompress == nullptr || data_compressor_.get_uncompressed_length == nullptr)) {
+        return Status::corruption("table reader: data compressor unavailable", std::to_string(data_compressor_id));
+    }
+
     for (size_t i = 0; i < summary_->size(); ++i) {
         const SummaryEntry &entry = summary_->entry(i);
         if (entry.compressed_size == 0 || entry.block_offset > index_size ||
@@ -335,8 +338,29 @@ class TableIterator final : public EntryIterator {
 
     ValueRef value_ref() const override {
         assert(valid_);
+        const IndexBlockEntry entry = block_reader_->entry(slot_);
+
+        // Resolve inline/tombstone records through the block cache.  The pin
+        // keeps the block alive until the next call, so record views stay valid
+        // across repeated reads of the same entry.
+        if (!is_vlog_blob_type(entry.handle.type)) {
+            Cache::Handle pin;
+            const DataBlockEntry *record = nullptr;
+            Status s = owner_->resolve_inline_(entry.handle, entry.key, &pin, &record);
+            if (!s.is_ok()) {
+                status_ = s;
+                return ValueRef();
+            }
+            resident_data_block_ = std::move(pin);
+            ValueRef ref;
+            ref.type = record->type;
+            ref.timestamp = entry.timestamp;
+            ref.inline_value = record->value;
+            return ref;
+        }
+
         ValueRef ref;
-        Status s = owner_->make_value_ref_(block_reader_->entry(slot_), &scratch_, &ref);
+        Status s = owner_->make_value_ref_(entry, &scratch_, &ref);
         if (!s.is_ok()) {
             status_ = s;
             return ValueRef();
@@ -444,6 +468,10 @@ class TableIterator final : public EntryIterator {
     size_t slot_ = 0;
     bool valid_ = false;
 
+    // Keeps the resolved data block alive across value_ref() calls; the view
+    // returned by value_ref() points into it.
+    mutable Cache::Handle resident_data_block_;
+
     mutable std::string scratch_;
     mutable Status status_;
 };
@@ -496,30 +524,56 @@ Status TableReader::read_index_block_(uint64_t block_offset, uint32_t compressed
     return Status::ok();
 }
 
+Status TableReader::resolve_inline_(const ValueHandle &handle, std::string_view expected_key, Cache::Handle *pin,
+                                    const DataBlockEntry **entry_out) const {
+    if (pin == nullptr || entry_out == nullptr) {
+        return Status::invalid_argument("table reader: null inline resolution output");
+    }
+    pin->reset();
+    *entry_out = nullptr;
+    if (is_vlog_blob_type(handle.type)) {
+        return Status::invalid_argument("table reader: blob handle passed to inline resolver");
+    }
+    // The inline slot addresses a framed data block: file_id is the block's
+    // absolute offset and data_offset is the record's offset inside the
+    // uncompressed block.
+    if (handle.size < kDataBlockHeaderSize) {
+        return Status::corruption("table reader: data block too small", std::to_string(handle.size));
+    }
+
+    CachedDataBlock *block = nullptr;
+    Status s =
+        block_cache_.get(data_reader_, data_file_size_, data_compressor_, handle.file_id, handle.size, pin, &block);
+    if (!s.is_ok()) { return s; }
+    if (!*pin || block == nullptr) { return Status::corruption("table reader: block cache returned no block"); }
+
+    // *pin owns block for the rest of this call, so no error path frees it.
+    size_t index = 0;
+    if (!block->reader->find_offset(handle.data_offset, &index)) {
+        return Status::corruption("table reader: data block record offset missing", std::to_string(handle.data_offset));
+    }
+    const DataBlockEntry &record = block->reader->entry(index);
+    if (record.key != expected_key) { return Status::corruption("table reader: data record key mismatch"); }
+    if (record.type != handle.type) { return Status::corruption("table reader: index/data record metadata mismatch"); }
+
+    *entry_out = &record;
+    return Status::ok();
+}
+
 Status TableReader::read_inline_value_(const ValueHandle &handle, std::string_view expected_key, std::string *scratch,
                                        std::string_view *value) const {
     if (value == nullptr) { return Status::invalid_argument("table reader: null inline value output"); }
     *value = std::string_view();
-    if (handle.type == EntryType::Blob) {
-        return Status::invalid_argument("table reader: blob handle passed to inline reader");
-    }
-    if (handle.size < kDataRecordHeaderSize) {
-        return Status::corruption("table reader: data record size too small", std::to_string(handle.size));
-    }
-    if (handle.offset >= data_file_size_ || handle.size > data_file_size_ - handle.offset) {
-        return Status::corruption("table reader: data record out of range", std::to_string(handle.offset));
-    }
 
-    std::string_view view;
-    Status s = read_exact(data_reader_, handle.offset, handle.size, scratch, &view);
+    Cache::Handle pin;
+    const DataBlockEntry *record = nullptr;
+    Status s = resolve_inline_(handle, expected_key, &pin, &record);
     if (!s.is_ok()) { return s; }
 
-    ParsedDataRecord record;
-    s = decode_single_record(view, &record);
-    if (!s.is_ok()) { return s; }
-    if (record.key != expected_key) { return Status::corruption("table reader: data record key mismatch"); }
-    if (record.type != handle.type) { return Status::corruption("table reader: index/data record metadata mismatch"); }
-    *value = record.value;
+    // The record view belongs to the pinned block; copy it so the caller's value
+    // survives once the pin is released.
+    scratch->assign(record->value.data(), record->value.size());
+    *value = std::string_view(scratch->data(), scratch->size());
     return Status::ok();
 }
 
@@ -529,10 +583,10 @@ Status TableReader::make_value_ref_(const IndexBlockEntry &entry, std::string *s
     *out = ValueRef();
     out->type = entry.handle.type;
     out->timestamp = entry.timestamp;
-    if (entry.handle.type == EntryType::Blob) {
+    if (is_vlog_blob_type(entry.handle.type)) {
         out->blob.file_id = entry.handle.file_id;
         out->blob.size = entry.handle.size;
-        out->blob.offset = entry.handle.offset;
+        out->blob.offset = entry.handle.data_offset;
         return Status::ok();
     }
 

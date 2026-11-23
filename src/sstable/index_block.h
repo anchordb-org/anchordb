@@ -53,31 +53,30 @@ inline size_t round_index_block_size(size_t block_size) noexcept {
     return aligned > kMaxIndexBlockSize ? kMaxIndexBlockSize : aligned;
 }
 
-// Fixed on-disk sizes of the index block layout below.  A slot is 19 bytes:
-// key_local_offset (2B) + type (1B) + file_id (4B) + size (4B) +
-// data_global_offset (8B).
+// Fixed on-disk sizes of the index block layout below.  A slot is 15 bytes:
+// key_local_offset (2B) + type (1B) + file_id/block_offset (4B) + size (4B) +
+// data_offset (4B).
 inline constexpr size_t kIndexHeaderSize = 8;
-inline constexpr size_t kIndexSlotSize = 19;
+inline constexpr size_t kIndexSlotSize = 15;
 
 // Byte offsets of the fields within one forward slot.
-inline constexpr size_t kSlotKeyOffsetOff = 0;     // key_local_offset (2B)
-inline constexpr size_t kSlotTypeOff = 2;          // type (1B)
-inline constexpr size_t kSlotFileIdOff = 3;        // file_id (4B)
-inline constexpr size_t kSlotSizeOff = 7;          // size (4B)
-inline constexpr size_t kSlotGlobalOffsetOff = 11; // data_global_offset (8B)
+inline constexpr size_t kSlotKeyOffsetOff = 0;         // key_local_offset (2B)
+inline constexpr size_t kSlotTypeOff = 2;              // type (1B)
+inline constexpr size_t kSlotFileOrBlockOffsetOff = 3; // file_id / block_offset (4B)
+inline constexpr size_t kSlotSizeOff = 7;              // size (4B)
+inline constexpr size_t kSlotDataOffsetOff = 11;       // data_offset (4B)
 
 struct ValueHandle {
     EntryType type;
-    // vLog file id for blob entries; always 0 for inline_ and tombstone
-    // entries.
+    // Blob: vLog file id.  Inline/tombstone: absolute offset of the framed data
+    // block in -Data.adb.  The entry type selects which meaning applies.
     uint32_t file_id;
-    // For inline_ entries this is the absolute offset of the data record in
-    // -Data.adb; for blob entries it is the absolute offset of the complete
-    // record in the vLog file identified by file_id, starting at its header.
-    uint64_t offset;
-    // Total encoded record size: the data record size for inline_ entries and
-    // the full vLog record size for blob entries.  uint32_t because oversized
-    // values go to the vLog, so an inline record always fits in 32 bits.
+    // Blob: absolute offset of the complete vLog record, starting at its header.
+    // Inline/tombstone: byte offset of the record inside the uncompressed data
+    // block.  32 bits, which caps a vLog file at kMaxRecordFileSize (4 GiB).
+    uint32_t data_offset;
+    // Inline/tombstone: on-disk (possibly compressed) size of the data block.
+    // Blob: full encoded vLog record size.
     uint32_t size;
 };
 
@@ -93,14 +92,15 @@ struct ValueHandle {
     |   - free_space_boundary (4 Bytes): Byte offset marking the boundary where backward payload begins         |
     +-----------------------------------------------------------------------------------------------------------+
     | [FORWARD FIXED-SIZE SLOTS ARRAY (Grows forward from byte offset 8)]                                       |
-    |   - Slot 0: [key_local_offset (2B) | type (1B) | file_id (4B) | size (4B) | data_global_offset (8B)]      |
-    |   - Slot 1: [key_local_offset (2B) | type (1B) | file_id (4B) | size (4B) | data_global_offset (8B)]      |
-    |   - Slot N: Totaling 19 bytes per slot.                                                                   |
+    |   - Slot 0: [key_local_offset (2B) | type (1B) | file_id/block_offset (4B) | size (4B) | data_offset (4B)] |
+    |   - Slot 1: [key_local_offset (2B) | type (1B) | file_id/block_offset (4B) | size (4B) | data_offset (4B)] |
+    |   - Slot N: Totaling 15 bytes per slot.                                                                   |
     |                                                                                                           |
     |       Field Metadata Definitions:                                                                         |
     |         - type (1B): [0x0 = Tombstone] | [0x1 = Inline in -Data.adb] | [0x2 = Pointer to vLog]             |
-    |         - file_id (4B): vLog file id for blob entries; always 0 otherwise                                 |
-    |         - size (4B): Full encoded record size for inline and blob entries                                 |
+    |         - file_id/block_offset (4B): blob: vLog file id; inline/tombstone: absolute data-block offset       |
+    |         - size (4B): inline/tombstone: stored data block size; blob: full encoded record size              |
+    |         - data_offset (4B): inline/tombstone: in-block record offset; blob: absolute vLog record offset    |
     +-----------------------------------------------------------------------------------------------------------+
     |                                  ... UNUSED BLOCK SPACE ...                                               |
     +-----------------------------------------------------------------------------------------------------------+
@@ -198,10 +198,10 @@ class IndexBlockBuilder {
 };
 
 // Encoded size of the value returned by an index block iterator's value():
-//   [ type (1B) | file_id (4B) | size (4B) | offset (8B) | timestamp (8B) ]
+//   [ type (1B) | file_id/block_offset (4B) | size (4B) | data_offset (4B) | timestamp (8B) ]
 // Decode it with IndexBlockReader::decode_value().
 inline constexpr size_t kIndexValueSize =
-    sizeof(uint8_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint64_t) + sizeof(uint64_t);
+    sizeof(uint8_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint64_t);
 
 // A fully decoded index block entry.
 struct IndexBlockEntry {

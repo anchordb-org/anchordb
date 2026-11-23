@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "arc.h"
+#include "sharded_cache.h"
 #include <string_view>
 
 #include "anchordb/anchordb_namespace.h"
@@ -27,8 +28,8 @@ void ARCCache::remove_ghost_(ARCHandle *e) {
         b2_.remove(k);
     }
 
-    std::visit([&](auto &active_map) { active_map.remove(k); }, map_);
-    free(e);
+    map_.remove(k);
+    free_entry(e);
 }
 
 // Evicts one resident entry from T1 or T2 into the matching ghost list,
@@ -44,8 +45,7 @@ void ARCCache::replace(const HashedKey &key, bool in_b2) {
             old->in_cache = false;
             old->state = ARCHandle::State::kB1;
             usage_ -= old->charge;
-            (*old->deleter)(old->key(), old->value);
-            old->value = nullptr;
+            install_value(old, nullptr, nullptr);
 
             b1_.push_front(HashedKey{old->key(), old->hash}, old);
         }
@@ -58,63 +58,55 @@ void ARCCache::replace(const HashedKey &key, bool in_b2) {
             old->in_cache = false;
             old->state = ARCHandle::State::kB2;
             usage_ -= old->charge;
-            (*old->deleter)(old->key(), old->value);
-            old->value = nullptr;
+            install_value(old, nullptr, nullptr);
 
             b2_.push_front(HashedKey{old->key(), old->hash}, old);
         }
     }
 }
 
-Cache::Handle *ARCCache::insert(std::string_view key, uint64_t hash, void *value, size_t charge,
-                                void (*deleter)(const std::string_view key, void *value)) {
-    mutex_.lock();
+ARCHandle *ARCCache::insert(std::string_view key, uint64_t hash, void *value, size_t charge, CacheDeleter deleter) {
+    std::lock_guard<std::mutex> lock(mutex_);
     HashedKey hkey{key, hash};
 
     // A zero-capacity cache stores nothing.  Hand back an uncached node that
     // the caller's release() frees, matching LRU's capacity-0 behavior.
     if (capacity_ == 0) {
-        ARCHandle *uncached = reinterpret_cast<ARCHandle *>(malloc(sizeof(ARCHandle) - 1 + key.size()));
+        ARCHandle *uncached = allocate_entry<ARCHandle>(key);
+        if (uncached == nullptr) { return nullptr; }
         uncached->value = value;
         uncached->deleter = deleter;
         uncached->charge = charge;
         uncached->hash = hash;
         uncached->in_cache = false;
         uncached->state = ARCHandle::State::kT1;
-        uncached->key_len = key.size();
         uncached->refs = 1; // only the returned handle
-        std::memcpy(uncached->key_data, key.data(), key.size());
-        mutex_.unlock();
-        return reinterpret_cast<Cache::Handle *>(uncached);
+        return uncached;
     }
 
-    ARCHandle *e = std::visit([&](auto &active_map) { return active_map.get(hkey); }, map_);
+    ARCHandle *e = map_.get(hkey);
 
     if (e != nullptr && e->in_cache) {
-        // Cache Hit: Key already present in T1 or T2.  Release the value being
-        // replaced just as the other backends do.
-        if (e->deleter != nullptr && e->value != nullptr) { (*e->deleter)(e->key(), e->value); }
+        // Cache Hit: Key already present in T1 or T2.  The replaced value is
+        // deferred while a Handle still pins the entry.
         usage_ -= e->charge;
-        e->value = value;
+        install_value(e, value, deleter);
         e->charge = charge;
-        e->deleter = deleter;
         usage_ += charge;
         ref(e);
-        mutex_.unlock();
-        return reinterpret_cast<Cache::Handle *>(e);
+        return e;
     }
 
     // Allocate new handle
-    ARCHandle *handle = reinterpret_cast<ARCHandle *>(malloc(sizeof(ARCHandle) - 1 + key.size()));
+    ARCHandle *handle = allocate_entry<ARCHandle>(key);
+    if (handle == nullptr) { return nullptr; }
 
     handle->value = value;
     handle->deleter = deleter;
     handle->charge = charge;
-    handle->key_len = key.size();
     handle->hash = hash;
     handle->in_cache = true;
     handle->refs = 2; // 1 for returned client handle, 1 for cache reference
-    std::memcpy(handle->key_data, key.data(), key.size());
 
     if (e != nullptr && !e->in_cache) {
         // Ghost Hit: Entry found in B1 or B2
@@ -138,7 +130,7 @@ Cache::Handle *ARCCache::insert(std::string_view key, uint64_t hash, void *value
         HashedKey handle_key{handle->key(), handle->hash};
         t2_in_use_.push_front(handle_key, handle);
         usage_ += charge;
-        std::visit([&](auto &active_map) { active_map.insert(handle_key, handle); }, map_);
+        map_.insert(handle_key, handle);
 
     } else {
         // Complete Cache Miss
@@ -155,7 +147,7 @@ Cache::Handle *ARCCache::insert(std::string_view key, uint64_t hash, void *value
             } else {
                 if (!t1_lru_.is_empty()) {
                     ARCHandle *old = t1_lru_.back();
-                    std::visit([&](auto &active_map) { active_map.remove(HashedKey{old->key(), old->hash}); }, map_);
+                    map_.remove(HashedKey{old->key(), old->hash});
                     finish_erase(old);
                 }
             }
@@ -175,37 +167,34 @@ Cache::Handle *ARCCache::insert(std::string_view key, uint64_t hash, void *value
         HashedKey handle_key{handle->key(), handle->hash};
         t1_in_use_.push_front(handle_key, handle);
         usage_ += charge;
-        std::visit([&](auto &active_map) { active_map.insert(handle_key, handle); }, map_);
+        map_.insert(handle_key, handle);
     }
 
-    mutex_.unlock();
-    return reinterpret_cast<Cache::Handle *>(handle);
+    return handle;
 }
 
-Cache::Handle *ARCCache::lookup(std::string_view key, uint64_t hash) {
-    mutex_.lock();
+ARCHandle *ARCCache::lookup(std::string_view key, uint64_t hash) {
+    std::lock_guard<std::mutex> lock(mutex_);
     HashedKey hkey{key, hash};
-    ARCHandle *e = std::visit([&](auto &active_map) { return active_map.get(hkey); }, map_);
+    ARCHandle *e = map_.get(hkey);
 
     if (e != nullptr && e->in_cache) {
         ref(e);
     } else {
         e = nullptr; // Ghost entries cannot be looked up by callers
     }
-    mutex_.unlock();
-    return reinterpret_cast<Cache::Handle *>(e);
+    return e;
 }
 
-void ARCCache::release(Cache::Handle *handle) {
-    mutex_.lock();
-    unref(reinterpret_cast<ARCHandle *>(handle));
-    mutex_.unlock();
+void ARCCache::release(ARCHandle *handle) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    unref(handle);
 }
 
 void ARCCache::erase(std::string_view key, uint64_t hash) {
-    mutex_.lock();
+    std::lock_guard<std::mutex> lock(mutex_);
     HashedKey hkey{key, hash};
-    ARCHandle *e = std::visit([&](auto &active_map) { return active_map.remove(hkey); }, map_);
+    ARCHandle *e = map_.remove(hkey);
 
     if (e != nullptr) {
         if (e->in_cache) {
@@ -214,16 +203,15 @@ void ARCCache::erase(std::string_view key, uint64_t hash) {
             remove_ghost_(e);
         }
     }
-    mutex_.unlock();
 }
 
 void ARCCache::prune() {
-    mutex_.lock();
+    std::lock_guard<std::mutex> lock(mutex_);
     auto purge_lru = [&](List<ARCHandle *> &lru_list) {
         while (!lru_list.is_empty()) {
             ARCHandle *e = lru_list.back();
             assert(e->refs == 1);
-            std::visit([&](auto &active_map) { active_map.remove(HashedKey{e->key(), e->hash}); }, map_);
+            map_.remove(HashedKey{e->key(), e->hash});
             finish_erase(e);
         }
     };
@@ -233,7 +221,6 @@ void ARCCache::prune() {
 
     while (!b1_.is_empty()) { remove_ghost_(b1_.back()); }
     while (!b2_.is_empty()) { remove_ghost_(b2_.back()); }
-    mutex_.unlock();
 }
 
 void ARCCache::ref(ARCHandle *e) {
@@ -259,8 +246,9 @@ void ARCCache::unref(ARCHandle *e) {
     if (e->refs == 0) {
         assert(!e->in_cache);
         if (e->value != nullptr) { (*e->deleter)(e->key(), e->value); }
-        free(e);
+        free_entry(e);
     } else if (e->in_cache && e->refs == 1) {
+        flush_deferred(e);
         HashedKey k{e->key(), e->hash};
         // Move node from in-use to its corresponding LRU sub-list
         if (e->state == ARCHandle::State::kT1) {
@@ -298,6 +286,6 @@ bool ARCCache::finish_erase(ARCHandle *e) {
     return false;
 }
 
-Cache *new_arc_cache(size_t capacity, MapType t) { return new ShardedARCCache(capacity, t); }
+Cache *new_arc_cache(size_t capacity, MapType t) { return new ShardedCache<ARCCache, ARCHandle>(capacity, t); }
 
 } // namespace ANCHORDB_NAMESPACE

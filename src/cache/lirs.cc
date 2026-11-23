@@ -13,28 +13,26 @@
 // limitations under the License.
 
 #include "lirs.h"
+#include "sharded_cache.h"
 
 #include "anchordb/anchordb_namespace.h"
 
 namespace ANCHORDB_NAMESPACE {
 
-Cache::Handle *LIRSCache::insert(std::string_view key, uint64_t hash, void *value, size_t charge,
-                                 void (*deleter)(std::string_view key, void *value)) {
-    mutex_.lock();
+LIRSHandle *LIRSCache::insert(std::string_view key, uint64_t hash, void *value, size_t charge, CacheDeleter deleter) {
+    std::lock_guard<std::mutex> lock(mutex_);
 
     // Check if key already exists in cache/history
-    LIRSHandle *e = std::visit([&](auto &active_map) { return active_map.get(HashedKey{key, hash}); }, map_);
+    LIRSHandle *e = map_.get(HashedKey{key, hash});
 
     if (e != nullptr) {
         if (e->is_resident) {
-            // Overwrite existing resident node
-            if (e->deleter && e->value) { (*e->deleter)(e->key(), e->value); }
+            // Overwrite existing resident node (old value deferred if pinned).
             usage_ -= e->charge;
             if (e->is_lir) { lir_usage_ -= e->charge; }
         }
 
-        e->value = value;
-        e->deleter = deleter;
+        install_value(e, value, deleter);
         e->charge = charge;
         e->is_resident = true;
         usage_ += charge;
@@ -87,24 +85,22 @@ Cache::Handle *LIRSCache::insert(std::string_view key, uint64_t hash, void *valu
 
         ref(e); // Reference count for caller
         evict();
-        mutex_.unlock();
-        return reinterpret_cast<Cache::Handle *>(e);
+        return e;
     }
 
     // New key insertion
-    e = reinterpret_cast<LIRSHandle *>(malloc(sizeof(LIRSHandle) - 1 + key.size()));
+    e = allocate_entry<LIRSHandle>(key);
+    if (e == nullptr) { return nullptr; }
 
     e->value = value;
     e->deleter = deleter;
     e->charge = charge;
-    e->key_len = key.size();
     e->hash = hash;
     e->in_cache = true;
     e->is_resident = true;
     e->refs = 2; // 1 for caller, 1 for cache internal structure
     e->in_stack = false;
     e->in_hir_list = false;
-    std::memcpy(e->key_data, key.data(), key.size());
 
     if (lir_usage_ < lir_capacity_) {
         // Cold start: Insert directly as LIR block
@@ -124,16 +120,15 @@ Cache::Handle *LIRSCache::insert(std::string_view key, uint64_t hash, void *valu
         e->in_hir_list = true;
     }
 
-    std::visit([&](auto &active_map) { active_map.insert(HashedKey{e->key(), e->hash}, e); }, map_);
+    map_.insert(HashedKey{e->key(), e->hash}, e);
 
     evict();
-    mutex_.unlock();
-    return reinterpret_cast<Cache::Handle *>(e);
+    return e;
 }
 
-Cache::Handle *LIRSCache::lookup(std::string_view key, uint64_t hash) {
-    mutex_.lock();
-    LIRSHandle *e = std::visit([&](auto &active_map) { return active_map.get(HashedKey{key, hash}); }, map_);
+LIRSHandle *LIRSCache::lookup(std::string_view key, uint64_t hash) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    LIRSHandle *e = map_.get(HashedKey{key, hash});
 
     if (e != nullptr && e->is_resident) {
         ref(e);
@@ -186,31 +181,27 @@ Cache::Handle *LIRSCache::lookup(std::string_view key, uint64_t hash) {
         e = nullptr; // Non-resident history hits return null on lookup
     }
 
-    mutex_.unlock();
-    return reinterpret_cast<Cache::Handle *>(e);
+    return e;
 }
 
-void LIRSCache::release(Cache::Handle *handle) {
-    mutex_.lock();
-    unref(reinterpret_cast<LIRSHandle *>(handle));
-    mutex_.unlock();
+void LIRSCache::release(LIRSHandle *handle) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    unref(handle);
 }
 
 void LIRSCache::erase(std::string_view key, uint64_t hash) {
-    mutex_.lock();
-    LIRSHandle *e = std::visit([&](auto &active_map) { return active_map.remove(HashedKey{key, hash}); }, map_);
+    std::lock_guard<std::mutex> lock(mutex_);
+    LIRSHandle *e = map_.remove(HashedKey{key, hash});
     finish_erase(e);
-    mutex_.unlock();
 }
 
 void LIRSCache::prune() {
-    mutex_.lock();
+    std::lock_guard<std::mutex> lock(mutex_);
     while (!hir_list_.is_empty()) {
         LIRSHandle *e = hir_list_.back();
-        std::visit([&](auto &active_map) { active_map.remove(HashedKey{e->key(), e->hash}); }, map_);
+        map_.remove(HashedKey{e->key(), e->hash});
         finish_erase(e);
     }
-    mutex_.unlock();
 }
 
 void LIRSCache::clear_all() {
@@ -219,7 +210,7 @@ void LIRSCache::clear_all() {
     // them all.
     while (!stack_.is_empty() || !hir_list_.is_empty()) {
         LIRSHandle *e = !stack_.is_empty() ? stack_.back() : hir_list_.back();
-        std::visit([&](auto &active_map) { active_map.remove(HashedKey{e->key(), e->hash}); }, map_);
+        map_.remove(HashedKey{e->key(), e->hash});
         finish_erase(e);
     }
 }
@@ -238,7 +229,7 @@ void LIRSCache::prune_stack() {
         // If it's a non-resident HIR entry no longer in stack, free its history
         // handle
         if (!bottom->is_resident && !bottom->in_hir_list) {
-            std::visit([&](auto &active_map) { active_map.remove(HashedKey{bottom->key(), bottom->hash}); }, map_);
+            map_.remove(HashedKey{bottom->key(), bottom->hash});
             bottom->in_cache = false;
             unref(bottom);
         }
@@ -251,18 +242,15 @@ void LIRSCache::evict() {
         hir_list_.pop_back();
         old->in_hir_list = false;
 
-        // Evict value payload
-        if (old->value && old->deleter) {
-            (*old->deleter)(old->key(), old->value);
-            old->value = nullptr;
-        }
+        // Evict value payload (deferred when the entry is still pinned).
+        install_value(old, nullptr, nullptr);
 
         old->is_resident = false;
         usage_ -= old->charge;
 
         // If no longer tracked in stack, clear history record completely
         if (!old->in_stack) {
-            std::visit([&](auto &active_map) { active_map.remove(HashedKey{old->key(), old->hash}); }, map_);
+            map_.remove(HashedKey{old->key(), old->hash});
             old->in_cache = false;
             unref(old);
         }
@@ -277,7 +265,9 @@ void LIRSCache::unref(LIRSHandle *e) {
     if (e->refs == 0) {
         assert(!e->in_cache);
         if (e->is_resident && e->deleter && e->value) { (*e->deleter)(e->key(), e->value); }
-        free(e);
+        free_entry(e);
+    } else if (e->in_cache && e->refs == 1) {
+        flush_deferred(e);
     }
 }
 
@@ -302,6 +292,6 @@ bool LIRSCache::finish_erase(LIRSHandle *e) {
     return e != nullptr;
 }
 
-Cache *new_lirs_cache(size_t capacity, MapType t) { return new ShardedLIRSCache(capacity, t); }
+Cache *new_lirs_cache(size_t capacity, MapType t) { return new ShardedCache<LIRSCache, LIRSHandle>(capacity, t); }
 
 } // namespace ANCHORDB_NAMESPACE

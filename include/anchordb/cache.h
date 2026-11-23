@@ -16,6 +16,7 @@
 
 #include "anchordb/export.h"
 #include "anchordb/options.h"
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
@@ -31,14 +32,14 @@ namespace ANCHORDB_NAMESPACE {
 // can bound total memory.  Values are opaque to the cache: it never inspects or
 // frees them directly, calling the supplied `deleter` instead.
 //
-// Entry lifetime: insert()/lookup() return a PinnedHandle that owns the entry
-// for its scope.  An entry is only reclaimed by the cache (or by erase()) after
-// every outstanding PinnedHandle has been destroyed, so callers never call
-// release() themselves.
+// Entry lifetime: insert()/lookup() return a Handle that owns the entry for its
+// scope.  An entry is only reclaimed by the cache (or by erase()) after every
+// outstanding Handle on it has been destroyed, so callers never release an
+// entry themselves and must not touch `value` past the handle's lifetime.
 //
 // Thread-safety: implementations are internally synchronized; a single Cache
-// may be shared across threads.  A given PinnedHandle, however, is not
-// thread-safe and must be destroyed on the same Cache it came from.
+// may be shared across threads.  A given Handle, however, is not thread-safe
+// and must be destroyed on the same Cache it came from.
 //
 // Obtain an instance via new_lru_cache(), new_lirs_cache() or
 // new_clock_pro_cache().
@@ -51,37 +52,34 @@ class ANCHORDB_EXPORT Cache {
 
     virtual ~Cache();
 
-    // Opaque, implementation-defined token identifying one cached entry.  Treat
-    // it as an opaque pointer; its layout is private to the implementation.
-    struct Handle {};
-
-    // Owning, move-only view of one cache entry.  The entry stays resident
-    // until every PinnedHandle on it is destroyed; the destructor releases the
-    // entry through the cache, so clients never call release().  An empty
-    // handle means the lookup missed.
-    class PinnedHandle {
+    // Owning, move-only handle to one cached entry.  The entry stays resident
+    // until every Handle on it is destroyed; the destructor releases the entry
+    // through the cache, so clients never release it themselves.  An empty
+    // handle means the lookup missed or the cache declined an insertion.
+    class Handle {
       public:
-        PinnedHandle() = default;
-        PinnedHandle(PinnedHandle &&other) noexcept;
-        PinnedHandle &operator=(PinnedHandle &&other) noexcept;
-        ~PinnedHandle();
+        Handle() = default;
+        Handle(Handle &&other) noexcept;
+        Handle &operator=(Handle &&other) noexcept;
+        ~Handle();
 
-        PinnedHandle(const PinnedHandle &) = delete;
-        PinnedHandle &operator=(const PinnedHandle &) = delete;
+        Handle(const Handle &) = delete;
+        Handle &operator=(const Handle &) = delete;
 
-        // The pinned value, or nullptr when empty.
-        void *value() const;
-        explicit operator bool() const { return handle_ != nullptr; }
+        // The pinned value, or nullptr when empty.  Read live from the entry so
+        // a value replaced in place by another insert is never returned stale.
+        void *value() const { return entry_ != nullptr ? cache_->value_(entry_) : nullptr; }
+        explicit operator bool() const { return entry_ != nullptr; }
 
         // Releases the entry.  Safe to call on an empty handle.
         void reset();
 
       private:
         friend class Cache;
-        PinnedHandle(Cache *cache, Handle *handle);
+        Handle(Cache *cache, void *entry) : cache_(cache), entry_(entry) {}
 
         Cache *cache_ = nullptr;
-        Handle *handle_ = nullptr;
+        void *entry_ = nullptr;
     };
 
     // Inserts the mapping key -> value, charging `charge` against the cache's
@@ -90,21 +88,22 @@ class ANCHORDB_EXPORT Cache {
     // If an entry for `key` already exists it is replaced.  `deleter` is
     // invoked with the key and value when the entry is finally evicted, erased
     // or destroyed; it is responsible for freeing `value`.
-    virtual PinnedHandle insert(std::string_view key, void *value, size_t charge,
-                                void (*deleter)(std::string_view key, void *value)) = 0;
+    virtual Handle insert(std::string_view key, void *value, size_t charge,
+                          void (*deleter)(std::string_view key, void *value)) = 0;
 
     // Returns a handle pinning the cached mapping of `key`, or an empty handle
     // on a miss.
-    virtual PinnedHandle lookup(std::string_view key) = 0;
+    virtual Handle lookup(std::string_view key) = 0;
 
     // Removes the mapping for `key`, if present.  The entry itself is kept
-    // alive until every outstanding PinnedHandle to it has been destroyed.
+    // alive until every outstanding Handle to it has been destroyed.
     virtual void erase(std::string_view key) = 0;
 
     // Returns a fresh numeric id, unique within this cache instance.  Clients
     // that share one cache can partition the key space by allocating an id up
-    // front and prefixing it to their keys.
-    virtual uint64_t new_id() = 0;
+    // front and prefixing it to their keys.  Implemented here so every cache
+    // (including custom subclasses) shares one correct counter.
+    uint64_t new_id() { return next_id_.fetch_add(1, std::memory_order_relaxed) + 1; }
 
     // Discards entries that are not currently pinned by a handle, reducing
     // memory usage on memory-constrained machines.
@@ -115,44 +114,43 @@ class ANCHORDB_EXPORT Cache {
     virtual size_t total_charge() const = 0;
 
   protected:
-    // Wraps a raw handle produced by an implementation's shard in an owning
-    // PinnedHandle.  Implementations call this from insert()/lookup().
-    PinnedHandle make_pinned(Handle *handle) { return PinnedHandle(this, handle); }
+    // Wraps a raw, implementation-owned entry in an owning Handle.
+    // Implementations call this from insert()/lookup().
+    Handle make_handle(void *entry) { return Handle(this, entry); }
 
   private:
-    // Invoked by PinnedHandle.  Not part of the public interface: releasing the
-    // last handle makes the entry reclaimable, and clients reach this only
-    // through the handle's destructor/reset().
-    virtual void release_(Handle *handle) = 0;
-    virtual void *value_(Handle *handle) = 0;
+    // Invoked by Handle.  Not part of the public interface: releasing the last
+    // handle makes the entry reclaimable, and clients reach this only through
+    // the handle's destructor/reset().
+    virtual void release_(void *entry) = 0;
+    virtual void *value_(void *entry) = 0;
+
+    // Monotonic id source for new_id().  Ids are per cache instance.
+    std::atomic<uint64_t> next_id_{0};
 };
 
-inline Cache::PinnedHandle::PinnedHandle(Cache *cache, Handle *handle) : cache_(cache), handle_(handle) {}
-
-inline Cache::PinnedHandle::PinnedHandle(PinnedHandle &&other) noexcept : cache_(other.cache_), handle_(other.handle_) {
+inline Cache::Handle::Handle(Handle &&other) noexcept : cache_(other.cache_), entry_(other.entry_) {
     other.cache_ = nullptr;
-    other.handle_ = nullptr;
+    other.entry_ = nullptr;
 }
 
-inline Cache::PinnedHandle &Cache::PinnedHandle::operator=(PinnedHandle &&other) noexcept {
+inline Cache::Handle &Cache::Handle::operator=(Handle &&other) noexcept {
     if (this != &other) {
         reset();
         cache_ = other.cache_;
-        handle_ = other.handle_;
+        entry_ = other.entry_;
         other.cache_ = nullptr;
-        other.handle_ = nullptr;
+        other.entry_ = nullptr;
     }
     return *this;
 }
 
-inline Cache::PinnedHandle::~PinnedHandle() { reset(); }
+inline Cache::Handle::~Handle() { reset(); }
 
-inline void *Cache::PinnedHandle::value() const { return handle_ != nullptr ? cache_->value_(handle_) : nullptr; }
-
-inline void Cache::PinnedHandle::reset() {
-    if (handle_ != nullptr) { cache_->release_(handle_); }
+inline void Cache::Handle::reset() {
+    if (entry_ != nullptr) { cache_->release_(entry_); }
     cache_ = nullptr;
-    handle_ = nullptr;
+    entry_ = nullptr;
 }
 
 // Creates a cache using the replacement policy selected by `type`.  `capacity`

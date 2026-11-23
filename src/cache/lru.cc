@@ -13,85 +13,79 @@
 // limitations under the License.
 
 #include "lru.h"
+#include "sharded_cache.h"
 
 #include "anchordb/anchordb_namespace.h"
 
 namespace ANCHORDB_NAMESPACE {
 
-Cache::Handle *LRUCache::insert(std::string_view key, uint64_t hash, void *value, size_t charge,
-                                void (*deleter)(std::string_view key, void *value)) {
-    mutex_.lock();
-    LRUHandle *e = reinterpret_cast<LRUHandle *>(malloc(sizeof(LRUHandle) - 1 + key.size()));
+LRUHandle *LRUCache::insert(std::string_view key, uint64_t hash, void *value, size_t charge, CacheDeleter deleter) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    LRUHandle *e = allocate_entry<LRUHandle>(key);
+    if (e == nullptr) { return nullptr; }
 
     e->value = value;
     e->deleter = deleter;
     e->charge = charge;
-    e->key_len = key.size();
     e->hash = hash;
     e->in_cache = false;
     e->refs = 1; // for the returned handle
-    std::memcpy(e->key_data, key.data(), key.size());
 
     if (capacity_ > 0) {
         e->refs++; // for the cache's reference
         e->in_cache = true;
+        usage_ += charge;
+
+        // Detach any previous entry for this key before linking the new one, so
+        // the in-use list index never holds two nodes for the same key (which
+        // would make push_front a no-op and leave the new entry untracked).
+        LRUHandle *old = map_.remove(HashedKey{e->key(), e->hash});
+        finish_erase(old);
+
         // The returned handle keeps the entry in use until the caller releases
         // it, so it starts on the in-use list.
         in_use_.push_front(HashedKey{e->key(), e->hash}, e);
-        usage_ += charge;
-
-        // Replace any previous entry for this key.  Remove the old map entry
-        // before inserting the new handle so the stored key view points into
-        // `e` (the surviving node), not the freed `old`.
-        LRUHandle *old =
-            std::visit([&](auto &active_map) { return active_map.remove(HashedKey{e->key(), e->hash}); }, map_);
-        finish_erase(old);
-        std::visit([&](auto &active_map) { active_map.insert(HashedKey{e->key(), e->hash}, e); }, map_);
+        map_.insert(HashedKey{e->key(), e->hash}, e);
     }
 
     while (usage_ > capacity_ && !lru_.is_empty()) {
         LRUHandle *old = lru_.back();
         assert(old->refs == 1);
-        std::visit([&](auto &active_map) { active_map.remove(HashedKey{old->key(), old->hash}); }, map_);
+        map_.remove(HashedKey{old->key(), old->hash});
         bool erased = finish_erase(old);
         if (!erased) { assert(erased); }
     }
 
-    mutex_.unlock();
-    return reinterpret_cast<Cache::Handle *>(e);
+    return e;
 }
 
-Cache::Handle *LRUCache::lookup(std::string_view key, uint64_t hash) {
-    mutex_.lock();
-    LRUHandle *e = std::visit([&](auto &active_map) { return active_map.get(HashedKey{key, hash}); }, map_);
+LRUHandle *LRUCache::lookup(std::string_view key, uint64_t hash) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    LRUHandle *e = map_.get(HashedKey{key, hash});
     if (e != nullptr) { ref(e); }
-    mutex_.unlock();
-    return reinterpret_cast<Cache::Handle *>(e);
+    return e;
 }
 
-void LRUCache::release(Cache::Handle *handle) {
-    mutex_.lock();
-    unref(reinterpret_cast<LRUHandle *>(handle));
-    mutex_.unlock();
+void LRUCache::release(LRUHandle *handle) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    unref(handle);
 }
 
 void LRUCache::erase(std::string_view key, uint64_t hash) {
-    mutex_.lock();
-    LRUHandle *e = std::visit([&](auto &active_map) { return active_map.remove(HashedKey{key, hash}); }, map_);
+    std::lock_guard<std::mutex> lock(mutex_);
+    LRUHandle *e = map_.remove(HashedKey{key, hash});
     finish_erase(e);
-    mutex_.unlock();
 }
 
 void LRUCache::prune() {
-    mutex_.lock();
+    std::lock_guard<std::mutex> lock(mutex_);
     while (!lru_.is_empty()) {
         LRUHandle *e = lru_.back();
         assert(e->refs == 1);
-        std::visit([&](auto &active_map) { active_map.remove(HashedKey{e->key(), e->hash}); }, map_);
+        map_.remove(HashedKey{e->key(), e->hash});
         bool erased = finish_erase(e);
         if (!erased) assert(erased);
     }
-    mutex_.unlock();
 }
 
 void LRUCache::ref(LRUHandle *e) {
@@ -108,7 +102,7 @@ void LRUCache::unref(LRUHandle *e) {
     if (e->refs == 0) {
         assert(!e->in_cache);
         (*e->deleter)(e->key(), e->value);
-        free(e);
+        free_entry(e);
     } else if (e->in_cache && e->refs == 1) {
         in_use_.remove(HashedKey{e->key(), e->hash});
         lru_.push_front(HashedKey{e->key(), e->hash}, e);
@@ -131,6 +125,6 @@ bool LRUCache::finish_erase(LRUHandle *e) {
     return e != nullptr;
 }
 
-Cache *new_lru_cache(size_t capacity, MapType t) { return new ShardedLRUCache(capacity, t); }
+Cache *new_lru_cache(size_t capacity, MapType t) { return new ShardedCache<LRUCache, LRUHandle>(capacity, t); }
 
 } // namespace ANCHORDB_NAMESPACE

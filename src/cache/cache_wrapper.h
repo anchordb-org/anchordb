@@ -49,12 +49,12 @@ class CacheWrapper {
 
     bool valid() const { return cache_ != nullptr; }
 
-    Cache::PinnedHandle insert(std::string_view key, void *value, size_t charge,
-                               void (*deleter)(std::string_view key, void *value)) {
+    Cache::Handle insert(std::string_view key, void *value, size_t charge,
+                         void (*deleter)(std::string_view key, void *value)) {
         return cache_->insert(key, value, charge, deleter);
     }
 
-    Cache::PinnedHandle lookup(std::string_view key) { return cache_->lookup(key); }
+    Cache::Handle lookup(std::string_view key) { return cache_->lookup(key); }
 
     void erase(std::string_view key) { cache_->erase(key); }
 
@@ -75,14 +75,14 @@ class CacheWrapper {
 // value.  The caller supplies the deleter used by the cache (and as a defensive
 // fallback should an implementation ever decline an insertion).
 template <typename V, typename OpenFn, typename ChargeFn>
-Status cache_lookup_or_open(CacheWrapper &cache, std::string_view key, Cache::PinnedHandle *pin, V **value,
-                            OpenFn &&open, ChargeFn &&charge, void (*deleter)(std::string_view, void *)) {
+Status cache_lookup_or_open(CacheWrapper &cache, std::string_view key, Cache::Handle *pin, V **value, OpenFn &&open,
+                            ChargeFn &&charge, void (*deleter)(std::string_view, void *)) {
     if (pin == nullptr) { return Status::invalid_argument("cache_lookup_or_open: null pin"); }
 
     pin->reset();
     if (value != nullptr) { *value = nullptr; }
 
-    if (Cache::PinnedHandle hit = cache.lookup(key)) {
+    if (Cache::Handle hit = cache.lookup(key)) {
         *pin = std::move(hit);
         if (value != nullptr) { *value = static_cast<V *>(pin->value()); }
         return Status::ok();

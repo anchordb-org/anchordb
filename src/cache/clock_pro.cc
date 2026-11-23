@@ -13,41 +13,40 @@
 // limitations under the License.
 
 #include "clock_pro.h"
+#include "sharded_cache.h"
 
 #include "anchordb/anchordb_namespace.h"
 
 namespace ANCHORDB_NAMESPACE {
 
-Cache::Handle *ClockProCache::insert(std::string_view key, uint64_t hash, void *value, size_t charge,
-                                     void (*deleter)(std::string_view key, void *value)) {
-    mutex_.lock();
+ClockProHandle *ClockProCache::insert(std::string_view key, uint64_t hash, void *value, size_t charge,
+                                      CacheDeleter deleter) {
+    std::lock_guard<std::mutex> lock(mutex_);
 
     // A zero-capacity cache stores nothing.  Hand back an uncached node that
     // the caller's release() frees, matching LRU's capacity-0 behavior and
     // avoiding a ring that can never be drained by evict().
     if (capacity_ == 0) {
-        ClockProHandle *uncached = reinterpret_cast<ClockProHandle *>(malloc(sizeof(ClockProHandle) - 1 + key.size()));
+        ClockProHandle *uncached = allocate_entry<ClockProHandle>(key);
+        if (uncached == nullptr) { return nullptr; }
         uncached->value = value;
         uncached->deleter = deleter;
         uncached->charge = charge;
-        uncached->key_len = key.size();
         uncached->hash = hash;
         uncached->in_cache = false;
         uncached->is_resident = true;
         uncached->is_hot = false;
         uncached->ref_bit = false;
         uncached->refs = 1; // only the returned handle
-        std::memcpy(uncached->key_data, key.data(), key.size());
-        mutex_.unlock();
-        return reinterpret_cast<Cache::Handle *>(uncached);
+        return uncached;
     }
 
-    ClockProHandle *e = std::visit([&](auto &active_map) { return active_map.get(HashedKey{key, hash}); }, map_);
+    ClockProHandle *e = map_.get(HashedKey{key, hash});
 
     if (e != nullptr) {
         if (e->is_resident) {
-            // Overwrite existing resident entry payload
-            if (e->deleter && e->value) { (*e->deleter)(e->key(), e->value); }
+            // Overwrite existing resident entry payload (old value deferred if
+            // it is still pinned).
             usage_ -= e->charge;
             if (e->is_hot) { hot_usage_ -= e->charge; }
         } else {
@@ -60,8 +59,7 @@ Cache::Handle *ClockProCache::insert(std::string_view key, uint64_t hash, void *
             e->is_hot = true;
         }
 
-        e->value = value;
-        e->deleter = deleter;
+        install_value(e, value, deleter);
         e->charge = charge;
         e->is_resident = true;
         e->ref_bit = true;
@@ -71,38 +69,35 @@ Cache::Handle *ClockProCache::insert(std::string_view key, uint64_t hash, void *
 
         ref(e);
         evict();
-        mutex_.unlock();
-        return reinterpret_cast<Cache::Handle *>(e);
+        return e;
     }
 
     // Allocate new node
-    e = reinterpret_cast<ClockProHandle *>(malloc(sizeof(ClockProHandle) - 1 + key.size()));
+    e = allocate_entry<ClockProHandle>(key);
+    if (e == nullptr) { return nullptr; }
 
     e->value = value;
     e->deleter = deleter;
     e->charge = charge;
-    e->key_len = key.size();
     e->hash = hash;
     e->in_cache = true;
     e->is_resident = true;
     e->is_hot = false;
     e->ref_bit = false;
     e->refs = 2; // 1 for returned handle, 1 for cache internal structure
-    std::memcpy(e->key_data, key.data(), key.size());
 
     usage_ += charge;
     ring_add(e);
 
-    std::visit([&](auto &active_map) { active_map.insert(HashedKey{e->key(), e->hash}, e); }, map_);
+    map_.insert(HashedKey{e->key(), e->hash}, e);
 
     evict();
-    mutex_.unlock();
-    return reinterpret_cast<Cache::Handle *>(e);
+    return e;
 }
 
-Cache::Handle *ClockProCache::lookup(std::string_view key, uint64_t hash) {
-    mutex_.lock();
-    ClockProHandle *e = std::visit([&](auto &active_map) { return active_map.get(HashedKey{key, hash}); }, map_);
+ClockProHandle *ClockProCache::lookup(std::string_view key, uint64_t hash) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ClockProHandle *e = map_.get(HashedKey{key, hash});
 
     if (e != nullptr && e->is_resident) {
         e->ref_bit = true;
@@ -111,31 +106,27 @@ Cache::Handle *ClockProCache::lookup(std::string_view key, uint64_t hash) {
         e = nullptr; // History nodes return null on lookup
     }
 
-    mutex_.unlock();
-    return reinterpret_cast<Cache::Handle *>(e);
+    return e;
 }
 
-void ClockProCache::release(Cache::Handle *handle) {
-    mutex_.lock();
-    unref(reinterpret_cast<ClockProHandle *>(handle));
-    mutex_.unlock();
+void ClockProCache::release(ClockProHandle *handle) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    unref(handle);
 }
 
 void ClockProCache::erase(std::string_view key, uint64_t hash) {
-    mutex_.lock();
-    ClockProHandle *e = std::visit([&](auto &active_map) { return active_map.remove(HashedKey{key, hash}); }, map_);
+    std::lock_guard<std::mutex> lock(mutex_);
+    ClockProHandle *e = map_.remove(HashedKey{key, hash});
     finish_erase(e);
-    mutex_.unlock();
 }
 
 void ClockProCache::prune() {
-    mutex_.lock();
+    std::lock_guard<std::mutex> lock(mutex_);
     while (!ring_.is_empty()) {
         ClockProHandle *e = ring_.head();
-        std::visit([&](auto &active_map) { active_map.remove(HashedKey{e->key(), e->hash}); }, map_);
+        map_.remove(HashedKey{e->key(), e->hash});
         finish_erase(e);
     }
-    mutex_.unlock();
 }
 
 void ClockProCache::evict() {
@@ -179,10 +170,8 @@ void ClockProCache::hand_cold_step() {
         } else {
             // Evict cold entry payload
             if (e->is_resident) {
-                if (e->value && e->deleter) {
-                    (*e->deleter)(e->key(), e->value);
-                    e->value = nullptr;
-                }
+                // Defer the payload if a Handle still pins this entry.
+                install_value(e, nullptr, nullptr);
                 e->is_resident = false;
                 usage_ -= e->charge;
             } else {
@@ -190,7 +179,7 @@ void ClockProCache::hand_cold_step() {
                 // advances hand_cold_ past the freed node.  Drop the map entry
                 // first: finish_erase() frees the node, and a dangling map entry
                 // would be dereferenced by the next lookup/insert.
-                std::visit([&](auto &active_map) { active_map.remove(HashedKey{e->key(), e->hash}); }, map_);
+                map_.remove(HashedKey{e->key(), e->hash});
                 finish_erase(e);
                 return;
             }
@@ -235,7 +224,7 @@ void ClockProCache::hand_test_step() {
     // re-referenced. ring_remove() advances hand_test_ past the freed node.
     if (!e->is_hot && !e->is_resident) {
         // Remove the map entry before finish_erase() frees the node.
-        std::visit([&](auto &active_map) { active_map.remove(HashedKey{e->key(), e->hash}); }, map_);
+        map_.remove(HashedKey{e->key(), e->hash});
         finish_erase(e);
         return;
     }
@@ -267,7 +256,9 @@ void ClockProCache::unref(ClockProHandle *e) {
     if (e->refs == 0) {
         assert(!e->in_cache);
         if (e->is_resident && e->deleter && e->value) { (*e->deleter)(e->key(), e->value); }
-        free(e);
+        free_entry(e);
+    } else if (e->in_cache && e->refs == 1) {
+        flush_deferred(e);
     }
 }
 
@@ -284,6 +275,8 @@ bool ClockProCache::finish_erase(ClockProHandle *e) {
     return e != nullptr;
 }
 
-Cache *new_clock_pro_cache(size_t capacity, MapType t) { return new ShardedClockProCache(capacity, t); }
+Cache *new_clock_pro_cache(size_t capacity, MapType t) {
+    return new ShardedCache<ClockProCache, ClockProHandle>(capacity, t);
+}
 
 } // namespace ANCHORDB_NAMESPACE

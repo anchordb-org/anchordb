@@ -56,9 +56,17 @@ struct ANCHORDB_EXPORT Compressor {
     bool (*get_uncompressed_length)(const char *input, size_t length, size_t *result) = nullptr;
 };
 
+// Returns a Compressor backed by the Snappy codec, or a disabled Compressor
+// (null function pointers) if Snappy was not available at build time.
 Compressor ANCHORDB_EXPORT new_snappy_compressor();
+// Returns a Compressor backed by the Zstd codec, or a disabled Compressor
+// (null function pointers) if Zstd was not available at build time.
 Compressor ANCHORDB_EXPORT new_zstd_compressor();
+// Returns a Compressor backed by the LZ4 codec, or a disabled Compressor
+// (null function pointers) if LZ4 was not available at build time.
 Compressor ANCHORDB_EXPORT new_lz4_compressor();
+// Returns a Compressor backed by the Zlib codec, or a disabled Compressor
+// (null function pointers) if Zlib was not available at build time.
 Compressor ANCHORDB_EXPORT new_zlib_compressor();
 
 // Returns the built-in compressor for `type`, or a disabled Compressor (null

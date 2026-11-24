@@ -25,7 +25,7 @@
 namespace ANCHORDB_NAMESPACE {
 
 // Allocates one id from a shared Cache and renders it as a fixed 8-byte key
-// prefix.  Independent cache consumers that share a Cache use this so their key
+// prefix. Independent cache consumers that share a Cache use this so their key
 // spaces never overlap.
 class CacheKeyNamespace {
   public:

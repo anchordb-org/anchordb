@@ -14,7 +14,7 @@
 
 #pragma once
 
-#include "memory/arena.h"
+#include "util/arena.h"
 #include "util/random.h"
 #include <atomic>
 #include <cassert>

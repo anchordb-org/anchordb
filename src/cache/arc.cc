@@ -286,6 +286,6 @@ bool ARCCache::finish_erase(ARCHandle *e) {
     return false;
 }
 
-Cache *new_arc_cache(size_t capacity, MapType t) { return new ShardedCache<ARCCache, ARCHandle>(capacity, t); }
+Cache *new_arc_cache(size_t capacity, MapType mt) { return new ShardedCache<ARCCache, ARCHandle>(capacity, mt); }
 
 } // namespace ANCHORDB_NAMESPACE

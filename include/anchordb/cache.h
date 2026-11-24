@@ -41,8 +41,7 @@ namespace ANCHORDB_NAMESPACE {
 // may be shared across threads.  A given Handle, however, is not thread-safe
 // and must be destroyed on the same Cache it came from.
 //
-// Obtain an instance via new_lru_cache(), new_lirs_cache() or
-// new_clock_pro_cache().
+// Obtain an instance via new_lru_cache(), new_lirs_cache(), new_clock_pro_cache() or new_arc_cache().
 class ANCHORDB_EXPORT Cache {
   public:
     Cache() = default;
@@ -154,20 +153,20 @@ inline void Cache::Handle::reset() {
 }
 
 // Creates a cache using the replacement policy selected by `type`.  `capacity`
-// bounds the sum of entry charges; `t` selects the hash-map backend used for
+// bounds the sum of entry charges; `mt` selects the hash-map backend used for
 // the index.  This is the shared policy-dispatch used by the table and vLog
 // reader caches.
-ANCHORDB_EXPORT Cache *new_cache(CacheType type, size_t capacity, MapType t);
+ANCHORDB_EXPORT Cache *new_cache(CacheType type, size_t capacity, MapType mt);
 
 // Creates a cache using the LRU replacement policy.  `capacity` bounds the sum
-// of entry charges; `t` selects the hash-map backend used for the index.
-ANCHORDB_EXPORT Cache *new_lru_cache(size_t capacity, MapType t);
+// of entry charges; `mt` selects the hash-map backend used for the index (see src/cache/lru.h).
+ANCHORDB_EXPORT Cache *new_lru_cache(size_t capacity, MapType mt);
 // Creates a cache using the LIRS replacement policy (see src/cache/lirs.h).
-ANCHORDB_EXPORT Cache *new_lirs_cache(size_t capacity, MapType t);
+ANCHORDB_EXPORT Cache *new_lirs_cache(size_t capacity, MapType mt);
 // Creates a cache using the CLOCK-Pro replacement policy (see
 // src/cache/clock_pro.h).
-ANCHORDB_EXPORT Cache *new_clock_pro_cache(size_t capacity, MapType t);
+ANCHORDB_EXPORT Cache *new_clock_pro_cache(size_t capacity, MapType mt);
 // Creates a cache using the ARC replacement policy (see src/cache/arc.h).
-ANCHORDB_EXPORT Cache *new_arc_cache(size_t capacity, MapType t);
+ANCHORDB_EXPORT Cache *new_arc_cache(size_t capacity, MapType mt);
 
 } // namespace ANCHORDB_NAMESPACE

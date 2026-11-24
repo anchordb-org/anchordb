@@ -275,8 +275,8 @@ bool ClockProCache::finish_erase(ClockProHandle *e) {
     return e != nullptr;
 }
 
-Cache *new_clock_pro_cache(size_t capacity, MapType t) {
-    return new ShardedCache<ClockProCache, ClockProHandle>(capacity, t);
+Cache *new_clock_pro_cache(size_t capacity, MapType mt) {
+    return new ShardedCache<ClockProCache, ClockProHandle>(capacity, mt);
 }
 
 } // namespace ANCHORDB_NAMESPACE

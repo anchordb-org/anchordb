@@ -50,3 +50,7 @@
 #if HAS_ZLIB
     #include <zlib.h>
 #endif // HAS_ZLIB
+
+#ifndef ANCHORDB_DIRECT_IO_DEFAULT
+    #define ANCHORDB_DIRECT_IO_DEFAULT 1
+#endif

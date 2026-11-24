@@ -24,9 +24,7 @@ namespace ANCHORDB_NAMESPACE {
 // Ordering definition for user keys, expressed as plain function pointers so a
 // custom comparator needs no inheritance.
 //
-// A comparator is a pure 3-way comparison over raw key bytes.  The optional
-// separator/successor helpers are used to shrink index separator keys; leave
-// them null to use the byte-wise defaults.  All keys in a database must be
+// A comparator is a pure 3-way comparison over raw key bytes. All keys in a database must be
 // ordered consistently by the comparator that created it, and that comparator
 // must be supplied again when the database is reopened.
 struct ANCHORDB_EXPORT Comparator {

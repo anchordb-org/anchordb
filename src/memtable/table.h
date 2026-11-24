@@ -17,9 +17,9 @@
 #include "anchordb/comparator.h"
 #include "anchordb/status.h"
 #include "db/entry_iterator.h"
-#include "memory/arena.h"
 #include "memtable/entry.h"
 #include "memtable/skiplist.h"
+#include "util/arena.h"
 #include <atomic>
 #include <cassert>
 #include <cstddef>

@@ -53,16 +53,14 @@ class PosixFileLock : public FileLock {
 class PosixLockTable {
   public:
     bool insert(const std::string &fname) {
-        mu_.lock();
+        std::lock_guard<std::mutex> lock(mu_);
         bool succeeded = locked_files_.insert(fname).second;
-        mu_.unlock();
         return succeeded;
     }
 
     void remove(const std::string &fname) {
-        mu_.lock();
+        std::lock_guard<std::mutex> lock(mu_);
         locked_files_.erase(fname);
-        mu_.unlock();
     }
 
   private:

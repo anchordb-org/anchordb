@@ -48,7 +48,7 @@ struct DeferredValue {
     DeferredValue *next{nullptr};
 };
 
-// Metadata shared by every policy entry.  The key itself lives in the tail of
+// Metadata shared by every policy entry. The key itself lives in the tail of
 // the concrete entry allocation and is referenced through `key_view`.
 struct EntryBase {
     void *value{nullptr};

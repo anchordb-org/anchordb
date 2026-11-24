@@ -87,9 +87,7 @@ class ANCHORDB_EXPORT Env {
     // Renames `src` to `target`, replacing `target` if it exists.
     virtual Status rename_file(const std::string &src, const std::string &target) = 0;
     // Truncates `fname` to exactly `size` bytes, making the change durable
-    // before returning.  Used by crash recovery to drop a torn record tail left
-    // by an interrupted append; `size` is normally the offset of the last
-    // complete record.  The default reports NotSupported so an Env that cannot
+    // before returning. The default reports NotSupported so an Env that cannot
     // truncate still compiles and lets the caller take a fallback path.
     virtual Status truncate_file(const std::string &fname, uint64_t size) {
         (void)fname;

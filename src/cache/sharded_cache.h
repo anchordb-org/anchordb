@@ -27,9 +27,9 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-// Partitions one replacement policy across kNumShards independent shards,
-// selecting the shard from the top hash bits.  Every policy implements the same
-// small shard contract over its own entry type:
+// Splits one replacement policy into kNumShards shards, picking the shard
+// from the top hash bits. Each policy has to provide the same small per-shard
+// interface over its own entry type:
 //
 //   Entry *insert(std::string_view, uint64_t, void *, size_t, CacheDeleter);
 //   Entry *lookup(std::string_view, uint64_t);
@@ -38,7 +38,7 @@ namespace ANCHORDB_NAMESPACE {
 //   void   prune();
 //   size_t total_charge() const;
 //
-// so the sharded Cache facade is written once here instead of per policy.
+// That way the sharded Cache facade lives here once, not in every policy.
 template <typename Shard, typename Entry> class ShardedCache final : public Cache {
   public:
     explicit ShardedCache(size_t capacity, MapType t) {

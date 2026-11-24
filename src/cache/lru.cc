@@ -125,6 +125,6 @@ bool LRUCache::finish_erase(LRUHandle *e) {
     return e != nullptr;
 }
 
-Cache *new_lru_cache(size_t capacity, MapType t) { return new ShardedCache<LRUCache, LRUHandle>(capacity, t); }
+Cache *new_lru_cache(size_t capacity, MapType mt) { return new ShardedCache<LRUCache, LRUHandle>(capacity, mt); }
 
 } // namespace ANCHORDB_NAMESPACE

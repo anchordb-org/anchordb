@@ -28,3 +28,20 @@ inline int alloc_aligned(void **ptr, size_t size, size_t alignment) {
     return 0; // Return 0 to match Windows success behavior
 }
 inline void free_aligned(void *ptr) { std::free(ptr); }
+
+#ifndef HAS_IO_URING
+    #define HAS_IO_URING 0
+#endif
+
+#if HAS_IO_URING
+    #include <liburing.h>
+#else
+struct io_uring;
+#endif
+
+// Common flags defined for all posix open operations
+#if defined(HAS_O_CLOEXEC)
+constexpr const int kOpenBaseFlags = O_CLOEXEC;
+#else
+constexpr const int kOpenBaseFlags = 0;
+#endif // defined(HAVE_O_CLOEXEC)

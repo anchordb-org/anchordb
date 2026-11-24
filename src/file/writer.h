@@ -19,7 +19,7 @@
 #include "anchordb/status.h"
 #include "file_meta.h"
 #include "filename.h"
-#include "io_uring_config.h"
+#include "port/port.h" // IWYU pragma: keep
 #include "util/aligned_buffer.h"
 #include <cstdint>
 

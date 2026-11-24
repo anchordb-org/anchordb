@@ -167,15 +167,19 @@ struct ANCHORDB_EXPORT Options {
     size_t manifest_max_file_size = 4 * 1024 * 1024;
     // Upper bound on concurrently open file descriptors.
     int max_open_files = 1000;
-};
 
-// Per-write tuning options.
-struct ANCHORDB_EXPORT WriteOptions {
-    WriteOptions() = default;
-
-    // If true, fsync the write-ahead log before the write is acknowledged as
-    // durable.
-    bool sync = false;
+    // Durability policy.  By default (false) the write-ahead log is only
+    // flushed to the OS when a write is acknowledged, leaving the bytes to the
+    // page cache: a crash may lose recent writes but the engine never pays for
+    // a disk round-trip.  Setting this adds an explicit fsync before the write
+    // is acknowledged, which costs a per-operation disk flush (a syscall plus a
+    // device barrier) and will dominate write latency.
+    //
+    // This is the only durability knob: SSTable files built by a flush and vLog
+    // records are always fsynced by the storage layer before the DB layer
+    // publishes their handle in the WAL / MANIFEST, so that ordering is not
+    // configurable here.
+    bool sync_wal = false;
 };
 
 } // namespace ANCHORDB_NAMESPACE

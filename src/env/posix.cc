@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "env/posix.h"
 #include "anchordb/env.h"
 #include "anchordb/status.h"
 #include "env/env_default.h"
+#include "env/posix.h"
 #include "file/random_access_reader.h"
 #include "file/sequential_reader.h"
 #include "file/writer.h"
@@ -33,10 +33,6 @@
 #include <vector>
 
 #include "anchordb/anchordb_namespace.h"
-
-#ifndef ANCHORDB_DIRECT_IO_DEFAULT
-    #define ANCHORDB_DIRECT_IO_DEFAULT 1
-#endif
 
 namespace ANCHORDB_NAMESPACE {
 
@@ -65,7 +61,7 @@ Env *create_default_env() { return new PosixEnv(); }
 
 } // namespace env_internal
 
-PosixEnv::PosixEnv() : PosixEnv(1000, 256, ANCHORDB_DIRECT_IO_DEFAULT != 0) {}
+PosixEnv::PosixEnv() : PosixEnv(1024, 256, ANCHORDB_DIRECT_IO_DEFAULT != 0) {}
 
 PosixEnv::PosixEnv(int max_open_files, uint32_t ring_entries, bool direct_io)
     : direct_io_(direct_io), ring_entries_(ring_entries), env_id_(next_env_id()), fd_limiter_(max_open_files) {
@@ -79,19 +75,19 @@ PosixEnv::PosixEnv(int max_open_files, uint32_t ring_entries, bool direct_io)
         delete default_ring_;
         default_ring_ = nullptr;
         default_ring_valid_ = false;
-        ring_status_ = Status::io_error(std::string_view("io_uring_queue_init"), std::strerror(-ret));
+        ring_status_ = Status::io_error("io_uring_queue_init", std::strerror(-ret));
     } else {
         default_ring_valid_ = true;
         ring_status_ = Status::ok();
     }
 #else
     default_ring_valid_ = false;
-    ring_status_ = Status::not_supported(std::string_view("io_uring support not compiled in"));
+    ring_status_ = Status::not_supported("io_uring support not compiled in");
 #endif
 }
 
 Status PosixEnv::create(int max_open_files, uint32_t ring_entries, bool direct_io, PosixEnv **result) {
-    if (result == nullptr) { return Status::invalid_argument(std::string_view("PosixEnv::create: result is null")); }
+    if (result == nullptr) { return Status::invalid_argument("PosixEnv::create: result is null"); }
     PosixEnv *env = new PosixEnv(max_open_files, ring_entries, direct_io);
     *result = env;
     return env->ring_status();

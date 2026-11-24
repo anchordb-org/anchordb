@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "memory/arena.h"
-
+#include "arena.h"
 #include <cassert>
 #include <cstddef>
 #include <cstdint>

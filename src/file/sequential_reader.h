@@ -17,7 +17,7 @@
 #include "anchordb/anchordb_namespace.h"
 #include "anchordb/env.h"
 #include "file_meta.h"
-#include "io_uring_config.h" // IWYU pragma: keep
+#include "port/port.h" // IWYU pragma: keep
 #include "util/aligned_buffer.h"
 #include <cstddef>
 #include <unistd.h>

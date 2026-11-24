@@ -20,13 +20,13 @@ namespace ANCHORDB_NAMESPACE {
 
 Cache::~Cache() = default;
 
-Cache *new_cache(CacheType type, size_t capacity, MapType t) {
+Cache *new_cache(CacheType type, size_t capacity, MapType mt) {
     switch (type) {
-    case CacheType::LIRS: return new_lirs_cache(capacity, t);
-    case CacheType::ClockPro: return new_clock_pro_cache(capacity, t);
-    case CacheType::Arc: return new_arc_cache(capacity, t);
+    case CacheType::LIRS: return new_lirs_cache(capacity, mt);
+    case CacheType::ClockPro: return new_clock_pro_cache(capacity, mt);
+    case CacheType::Arc: return new_arc_cache(capacity, mt);
     case CacheType::LRU:
-    default: return new_lru_cache(capacity, t);
+    default: return new_lru_cache(capacity, mt);
     }
 }
 

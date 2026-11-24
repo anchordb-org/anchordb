@@ -16,7 +16,6 @@
 
 #include "anchordb/env.h"
 #include "anchordb/status.h"
-#include "file/io_uring_config.h" // IWYU pragma: keep
 #include "file/limiter.h"
 #include "file/lock_table.h"
 #include "port/port.h" // IWYU pragma: keep
@@ -34,13 +33,6 @@
 #include "anchordb/anchordb_namespace.h"
 
 namespace ANCHORDB_NAMESPACE {
-
-// Common flags defined for all posix open operations
-#if defined(HAS_O_CLOEXEC)
-constexpr const int kOpenBaseFlags = O_CLOEXEC;
-#else
-constexpr const int kOpenBaseFlags = 0;
-#endif // defined(HAVE_O_CLOEXEC)
 
 // PosixEnv is the POSIX-specific implementation of the environment abstraction.
 // It provides file I/O, locking, scheduling, and timing utilities via io_uring

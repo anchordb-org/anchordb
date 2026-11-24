@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "writer.h"
 #include "anchordb/anchordb_namespace.h"
-#include "io_uring_config.h"
 #include "sync_io.h"
+#include "writer.h"
 #include <fcntl.h>
 #include <unistd.h>
 

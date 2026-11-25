@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "sstable/block_cache.h"
 #include "anchordb/env.h"
 #include "cache/cache_wrapper.h"
+#include "sstable/block_cache.h"
 #include "util/coding.h"
 #include <cstring>
 #include <string_view>
@@ -92,7 +92,7 @@ Status read_and_decode_block(RandomAccessFileReader *reader, uint64_t file_size,
 
 // Builds the resident entry for an already-decoded block.  Returns null (with
 // *s set) when the bytes do not parse.
-CachedDataBlock *make_block(std::string *bytes, Status *s) {
+CachedDataBlock *build_block(std::string *bytes, Status *s) {
     CachedDataBlock *block = new CachedDataBlock();
     block->bytes = std::move(*bytes);
     block->reader = new DataBlockReader(block->bytes);
@@ -106,7 +106,15 @@ CachedDataBlock *make_block(std::string *bytes, Status *s) {
     return block;
 }
 
+// Approximate charge of an entry: its byte payload, its parsed entries and a
+// fixed overhead.
+inline size_t block_charge(const CachedDataBlock *block) {
+    return kCachedBlockOverhead + block->bytes.capacity() + block->reader->size() * sizeof(DataBlockEntry);
+}
+
 } // namespace
+
+CachedDataBlock *BlockCache::make_block(std::string bytes, Status *s) { return build_block(&bytes, s); }
 
 void BlockCache::encode_key(uint64_t block_offset, uint32_t stored_size, char *key) const {
     key_namespace_.write_prefix(key);
@@ -131,7 +139,7 @@ Status BlockCache::get(RandomAccessFileReader *reader, uint64_t file_size, const
     *block = nullptr;
 
     // Fixed-width key: namespace | block offset | stored size.
-    char key[CacheKeyNamespace::kPrefixSize + sizeof(uint64_t) + sizeof(uint32_t)];
+    char key[kKeySize];
     encode_key(block_offset, stored_size, key);
     const std::string_view key_view(key, sizeof(key));
 
@@ -139,11 +147,8 @@ Status BlockCache::get(RandomAccessFileReader *reader, uint64_t file_size, const
         std::string bytes;
         Status s = read_and_decode_block(reader, file_size, codec, block_offset, stored_size, &bytes);
         if (!s.is_ok()) { return s; }
-        *out = make_block(&bytes, &s);
+        *out = build_block(&bytes, &s);
         return s;
-    };
-    auto charge = [](CachedDataBlock *opened) {
-        return kCachedBlockOverhead + opened->bytes.capacity() + opened->reader->size() * sizeof(DataBlockEntry);
     };
 
     // Every value that reaches the cache is owned by it, and every pin keeps
@@ -151,7 +156,27 @@ Status BlockCache::get(RandomAccessFileReader *reader, uint64_t file_size, const
     // zero-capacity cache declines the insert but still hands back a pin on an
     // uncached entry (cache_lookup_or_open frees the opened value itself).
     CacheWrapper wrapper(cache_);
-    return cache_lookup_or_open<CachedDataBlock>(wrapper, key_view, pin, block, open, charge, &delete_entry);
+    return cache_lookup_or_open<CachedDataBlock>(wrapper, key_view, pin, block, open, block_charge, &delete_entry);
+}
+
+Cache::Handle BlockCache::adopt(std::string_view key, CachedDataBlock *block) const {
+    if (block == nullptr) { return Cache::Handle(); }
+
+    // A lookup that missed while this read was in flight may have filled the
+    // slot first; its block is the resident one and this copy is redundant.
+    if (Cache::Handle hit = cache_->lookup(key)) {
+        destroy_entry(block);
+        return hit;
+    }
+
+    Cache::Handle pin = cache_->insert(key, block, block_charge(block), &delete_entry);
+    if (!pin) {
+        // The cache declined ownership (zero capacity), so nothing keeps the
+        // block alive; the caller re-reads it into its own buffer.
+        destroy_entry(block);
+        return Cache::Handle();
+    }
+    return pin;
 }
 
 } // namespace ANCHORDB_NAMESPACE

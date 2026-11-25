@@ -54,6 +54,7 @@ EnvWrapper::~EnvWrapper() = default;
 SequentialFileReader::~SequentialFileReader() = default;
 RandomAccessFileReader::~RandomAccessFileReader() = default;
 WritableFileWriter::~WritableFileWriter() = default;
+ReadBatcher::~ReadBatcher() = default;
 
 Logger::~Logger() = default;
 FileLock::~FileLock() = default;

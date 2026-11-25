@@ -37,6 +37,76 @@ namespace ANCHORDB_NAMESPACE {
 
 class EntryIterator;
 
+// Progress of one batched point lookup through a TableReader, in the order the
+// stages run.  A staged lookup advances one stage at a time, which is what lets
+// the DB layer group the same stage across many tables and run their I/O in one
+// batch:
+//
+//   prepare_index_read()  Idle            -> IndexQueued
+//   execute the batch     IndexQueued     -> IndexReady
+//   prepare_data_read()   IndexReady      -> DataQueued | DataReady | NotFound | Error
+//   execute the batch     DataQueued      -> DataReady
+//   finish_get()          DataReady       -> Finished
+//
+// Finished is terminal; only a new lookup moves a finished one back to Idle.
+// NotFound/Error are terminal for the lookup the stage failed on, but call()
+// resets them, so they do not have to be cleared before reuse.
+enum class LookUpStage : uint8_t {
+    Idle = 0x0,
+    IndexQueued = 0x1,
+    IndexReady = 0x2,
+    DataQueued = 0x3,
+    DataReady = 0x4,
+    NotFound = 0x5,
+    Finished = 0x6,
+    Error = 0x7,
+};
+
+// Storage and results for one batched point lookup.  The caller owns it and
+// must keep it alive until that lookup has left every batched stage.
+//
+// `out` is what a get() and a get_raw() both fill, but it is only fully safe to
+// read after finish_get().
+//
+// An inline record is exposed as a view into a pinned block or, when a reader
+// bypassed the cache, into `value`.  Without a pin the caller must copy an
+// inline `out.inline_value` out before it reuses this state for another lookup,
+// exactly as get_raw() requires of its `scratch`.  A blob entry's handle is
+// copied and needs no such care.
+//
+// A record served from the block cache is instead pinned by `block`, so its
+// view needs no copy: it stays valid as long as this state holds the pin.  A
+// new lookup on the same state releases that pin.
+struct TableReadState {
+    LookUpStage stage = LookUpStage::Idle;
+
+    // What the lookup found.  For an inline record `inline_value` points into
+    // the pinned block, or into `value` when nothing pins the block; in the
+    // latter case it is only valid until this state is reused, so the caller
+    // must copy it out first, as it must for get_raw().
+    ValueRef out;
+    Status status;
+
+    // Per-lookup I/O buffers.  Only the batched path reads into them; get_raw()
+    // and get() use caller-supplied storage.
+    std::string index;
+    std::string plain_index;
+    std::string data;
+    std::string plain;
+    std::string value;
+
+    // Keeps a data block resident in the block cache alive while `out`'s inline
+    // view points into it, exactly as the iterator's resident pin does.  Empty
+    // when the block came back from a read that bypassed the cache.
+    Cache::Handle block;
+
+    // Bytes the batcher transferred into the current buffer, checked against
+    // its length once the batch has run.
+    size_t bytes_read = 0;
+    // The index slot this lookup selected; valid once the index block is decoded.
+    size_t slot = 0;
+};
+
 // Point-read view over one SSTable.
 //
 // open() loads and parses the table's summary and (when configured and
@@ -59,9 +129,12 @@ class EntryIterator;
 //        Blob      return the vLog handle without reading the vLog
 //
 // -Data.adb blocks are read, decompressed and parsed by BlockCache, which
-// retains decompressed blocks when a shared Cache is supplied.  Point reads and
-// iterators share that resolution path, so a block is loaded and parsed at most
-// once while it is resident.
+// retains decompressed blocks when a shared Cache is supplied.  The staged
+// lookup below shares that cache: a resident block completes the lookup at
+// prepare_data_read() without any read, and a block it has to read enters the
+// cache.  Point reads, the staged path and iterators therefore share one
+// resolution path, so a block is loaded and parsed at most once while it is
+// resident.
 //
 // The reader performs no vLog I/O.  The DB layer resolves blob handles through
 // its BlobResolver, so all tables share one resolution path and one pool of open
@@ -101,7 +174,61 @@ class TableReader {
     // Status::not_found only when the key is absent from this table.  `scratch`
     // is required reusable per-call storage for the raw data record; *out's
     // inline view points into it.
-    Status get_raw(std::string_view key, ValueRef *out, std::string *scratch) const;
+    //
+    // This is the whole lookup run on the calling thread: it reads the index
+    // block and the data record with pread(2), one round trip each.
+    Status get(std::string_view key, ValueRef *out, std::string *scratch) const;
+
+    // Batched point lookup, staged so the DB layer can overlap the I/O of many
+    // tables in one ReadBatcher submission instead of one round trip per stage
+    // per table:
+    //
+    //   stage 1  prepare_index_read(st, key, batch)   Idle/Finished -> Index*   (queues)
+    //   ...      batch->execute(), the DB layer's single submission
+    //   stage 2  prepare_data_read(st, key, batch)    IndexReady -> Data*      (queues)
+    //   ...      batch->execute()
+    //   stage 3  finish_get(st)                       DataReady -> Finished
+    //
+    // Each stage performs only its own work and picks its predecessor from
+    // state.stage, so the three can also be called back to back for a single
+    // lookup (`call()` does exactly that).
+    //
+    // With `batcher` null the preparation stages read synchronously and land on
+    // IndexReady/DataReady rather than the Queued stages, so the same sequence
+    // still works; it just cannot overlap anything.
+    //
+    // IndexReady means the index bytes are in state.index and nothing more:
+    // the block is parsed, the binary search runs and the selected data block
+    // is resolved at the start of the next stage.  That is what keeps the record
+    // view valid: the data block is only materialized once the previous stage's
+    // view is no longer needed.
+
+    // Stage 1: consults the filter, maps `key` through the summary, and queues
+    // (or performs) the read of the index block that may hold it.  Leaving it at
+    // IndexQueued/IndexReady is the whole effect; every later stage calls it on
+    // its own if the lookup has not started.
+    void prepare_index_read(TableReadState &state, std::string_view key, ReadBatcher *batcher) const;
+
+    // Stage 2: parses the resident index block, runs the binary search, and
+    // resolves the selected slot's data block.  A block already resident in the
+    // cache completes the lookup here (DataReady, no I/O); otherwise the read is
+    // queued (DataQueued) and joins the cache when it completes.  Returns true
+    // when a data read is now queued.
+    bool prepare_data_read(TableReadState &state, std::string_view key, ReadBatcher *batcher) const;
+
+    // Stage 3: fills state.out from the selected index slot, from whichever
+    // block stage 2 left in state.out.block or state.data.  Returns true on
+    // success, false when state.stage is not a success state or the record does
+    // not match the slot.
+    bool finish_get(TableReadState &state) const;
+
+    // Runs a whole lookup on the calling thread and leaves its outcome in
+    // `state`: Finished on success, NotFound, or Error.
+    void call(TableReadState &state, std::string_view key) const;
+
+    // The batcher this reader's files read through, or null when they cannot
+    // batch.  See Env::new_read_batcher().
+    ReadBatcher *batcher() const;
 
     // Returns a heap-allocated bidirectional iterator over the whole table
     // (caller deletes).  It yields unresolved entries, tombstones included, in
@@ -136,6 +263,43 @@ class TableReader {
     Status read_index_block_(uint64_t block_offset, uint32_t compressed_size, std::string *stored_buf,
                              std::string *plain_buf, std::string_view *out) const;
 
+    // `read_index_block_` once the on-disk bytes are already resident, turning
+    // `stored` into the parseable block in *out.
+    Status decode_index_block_(std::string_view stored, std::string *plain_buf, std::string_view *out) const;
+
+    // Batched-path primitives.  queue_*_read_ stages a read on `batcher` (or
+    // performs it synchronously when it is null) and records the resulting
+    // stage, so the error/short-read handling lives in one place per buffer.
+    void queue_index_read_(const SummaryEntry &entry, TableReadState *state, ReadBatcher *batcher,
+                           bool *done = nullptr) const;
+    void queue_data_read_(const ValueHandle &handle, TableReadState *state, ReadBatcher *batcher) const;
+    // This table's block cache key for `handle`'s data block.  Returned by
+    // value: it must outlive the cache call that consumes it.
+    std::string block_cache_key_(const ValueHandle &handle) const;
+    // Pins the data block `handle` selects from `reader`'s cache when it is
+    // resident, so a lookup can complete without a read at prepare_data_read().
+    // On a miss state.block is left empty and the caller reads the block.
+    bool lookup_resident_block_(const ValueHandle &handle, TableReadState *state) const;
+    // Publishes the block `handle` addresses, read into state.data, inside the
+    // cache unless a concurrent lookup already put it there.  Either way
+    // state.block ends up pinning the cache slot, so state.data is only a
+    // transport buffer from here on.
+    Status adopt_data_block_(const ValueHandle &handle, TableReadState *state) const;
+    // Decodes `handle`'s stored data block from state.data into state.plain, for
+    // a block this reader could not adopt into the cache.
+    // Decodes `handle`'s block from the state's read buffer into state.plain,
+    // for a block this reader could not adopt into the cache.  Measured by the
+    // byte count the read transferred.
+    Status decode_data_block_(const ValueHandle &handle, TableReadState *state) const;
+    // Finds the record `handle` addresses inside `block` and validates it
+    // against `expected_key`.  Returns the entry by value; its views point into
+    // `block`, not into the short-lived parser.
+    Status find_record_(const ValueHandle &handle, std::string_view block, std::string_view expected_key,
+                        DataBlockEntry *record_out) const;
+    // Exposes the selected inline record's value in state.out, copying into
+    // state.value when the block is not pinned by state.block.
+    Status read_inline_value_from_state_(const IndexBlockEntry &entry, TableReadState *state) const;
+
     // Resolves an inline/tombstone slot through the block cache: loads and
     // parses its data block, finds the record at handle.data_offset, and
     // validates its key and type.  On success `*pin` owns the block and
@@ -154,6 +318,21 @@ class TableReader {
     // `scratch`, blob entries are returned as a handle with no vLog read.  Single
     // implementation shared by get_raw() and the table iterator.
     Status make_value_ref_(const IndexBlockEntry &entry, std::string *scratch, ValueRef *out) const;
+
+    // Reads the filter first, so a definite miss ends the lookup without any
+    // index or data I/O.  On false the lookup is already NotFound or Error.
+    bool filter_admits_(TableReadState &state, std::string_view key) const;
+    // Resolves the summary block for `key` and queues its index block into
+    // state.index, or records NotFound when the key is past the last block.
+    void prepare_index_(TableReadState &state, std::string_view key, ReadBatcher *batcher) const;
+    // Validates the queued index read, parses the block and records the slot.
+    bool decode_index_(TableReadState *state, std::string_view key) const;
+    // Binary-searches the parsed block for `key` and queues the selected slot's
+    // data record when it has one.
+    bool select_and_prepare_data_(TableReadState *state, ReadBatcher *batcher) const;
+    // Turns the resolved data block into state.out for the lookup's selected
+    // slot.
+    bool resolve_and_finish_(TableReadState *state) const;
 
     std::atomic<int> refs_{0};
 

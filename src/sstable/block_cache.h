@@ -85,6 +85,45 @@ class BlockCache {
     Status get(RandomAccessFileReader *reader, uint64_t file_size, const Compressor &codec, uint64_t block_offset,
                uint32_t stored_size, Cache::Handle *pin, CachedDataBlock **block) const;
 
+    // Size of a key built by make_key(), so callers can size a stack buffer.
+    static constexpr size_t kKeySize = CacheKeyNamespace::kPrefixSize + sizeof(uint64_t) + sizeof(uint32_t);
+
+    // Returns a pin on the block at (`block_offset`, `stored_size`) if it is
+    // already resident, or an empty handle on a miss.  `stored_size` is part of
+    // the key, so the caller must pass the length the slot recorded.
+    //
+    // This is a cache-only probe: it never reads or parses anything, which lets
+    // a caller that already has the block's location resolve it before deciding
+    // to perform I/O.
+    Cache::Handle lookup(uint64_t block_offset, uint32_t stored_size) const {
+        char key[kKeySize];
+        encode_key(block_offset, stored_size, key);
+        return cache_->lookup(std::string_view(key, sizeof(key)));
+    }
+
+    // Takes ownership of `block` and publishes it under `key`, which must have
+    // come from make_key() for `block`'s own location.  Returns a pin on the
+    // cache slot either way: if a concurrent lookup already inserted `key`,
+    // `block` is deleted and the resident entry is pinned instead, so the newly
+    // read bytes are never preferred over the ones already parsed.
+    //
+    // `block` must be a fully built entry (see BlockCache::get's load path); an
+    // empty pin means the cache declined it and `block` was deleted.
+    Cache::Handle adopt(std::string_view key, CachedDataBlock *block) const;
+
+    // Builds a cache entry from an uncompressed block, exactly as get() would
+    // after reading and decompressing it.  Returns null (with *s set) when the
+    // bytes do not parse.  The caller owns the result and publishes it with
+    // adopt(), which is how a caller that performed its own read still
+    // populates the cache.
+    static CachedDataBlock *make_block(std::string bytes, Status *s);
+
+    // This cache's key for the block at (`block_offset`, `stored_size`), sized
+    // kKeySize.
+    void make_key(uint64_t block_offset, uint32_t stored_size, char *key) const {
+        encode_key(block_offset, stored_size, key);
+    }
+
   private:
     // Cache deleter for a CachedDataBlock* value.
     static void delete_entry(std::string_view key, void *value);

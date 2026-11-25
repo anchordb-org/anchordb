@@ -97,6 +97,16 @@ class PosixEnv : public Env {
 
     Status new_logger(const std::string &filename, Logger **result) override;
 
+    // Creates a read batcher bound to this environment's thread-local io_uring
+    // ring, honoring the environment's |direct_io| setting.  Always succeeds:
+    // when io_uring is unavailable the batcher transparently uses pread(2).
+    Status new_read_batcher(ReadBatcher **result) override;
+
+    // Returns this thread's batcher for this environment, creating it on first
+    // use.  Readers resolve it per call, so a reader used on a different thread
+    // picks up that thread's batcher instead of the opener's.
+    ReadBatcher *read_batcher_for_thread() override;
+
     // Returns the current time in microseconds since the Unix epoch.
     uint64_t now_micros() override;
 
@@ -104,6 +114,13 @@ class PosixEnv : public Env {
     void sleep_for_micros(int micros) override;
 
   private:
+    // Returns this thread's batcher for this environment, creating it on first
+    // use.  It is bound to this thread's ring and, like that ring, is created
+    // on first use and freed when the thread exits.  Readers only ever obtain
+    // it through read_batcher_for_thread(), so they never borrow another
+    // thread's batcher.
+    ReadBatcher *batcher_for_thread_();
+
     // Configuration
     const bool direct_io_;
     const uint32_t ring_entries_;

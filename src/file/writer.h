@@ -24,13 +24,13 @@
 #include <cstdint>
 
 namespace ANCHORDB_NAMESPACE {
-// Buffered sequential write via io_uring. For MANIFEST files, sync() also
-// fsyncs the parent directory.
+// Buffered sequential write via synchronous pwrite(2). For MANIFEST files,
+// sync() also fsyncs the parent directory.
 class PosixWritableFileWriter final : public WritableFileWriter {
   public:
-    PosixWritableFileWriter(std::string filename, int fd, struct io_uring *ring, AlignedBuffer *buf = nullptr,
-                            bool direct_io = true, uint64_t initial_filesize = 0)
-        : filename_(std::move(filename)), fd_(fd), ring_(ring), filesize_(initial_filesize), direct_io_(direct_io),
+    PosixWritableFileWriter(std::string filename, int fd, AlignedBuffer *buf = nullptr, bool direct_io = true,
+                            uint64_t initial_filesize = 0)
+        : filename_(std::move(filename)), fd_(fd), filesize_(initial_filesize), direct_io_(direct_io),
           buf_offset_(initial_filesize), is_manifest_(is_manifest(filename_)), dirname_(dirname(filename_)) {
         if (buf != nullptr) {
             buf_ = std::move(*buf);
@@ -49,7 +49,7 @@ class PosixWritableFileWriter final : public WritableFileWriter {
     Status sync() override;
 
   private:
-    Status submit_write_(const char *src, size_t len, uint64_t offset);
+    Status write_at_(const char *src, size_t len, uint64_t offset);
     Status flush_buffer();
     Status sync_dir_if_manifest();
     Status sync_fd(int fd, const std::string &fd_path);
@@ -66,7 +66,6 @@ class PosixWritableFileWriter final : public WritableFileWriter {
     const bool is_manifest_;
     const std::string dirname_;
     int fd_;
-    struct io_uring *const ring_;
     uint64_t filesize_;
     const bool direct_io_;
     // Aligned logical offset where buf_ begins. Under O_DIRECT this stays

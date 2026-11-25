@@ -26,7 +26,6 @@
 #include "anchordb/anchordb_namespace.h"
 #include "anchordb/status.h"
 #include "file/file_meta.h"
-
 #include <cstddef>
 #include <cstdint>
 #include <string>

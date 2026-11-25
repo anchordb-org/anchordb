@@ -19,57 +19,9 @@
 #include <unistd.h>
 
 namespace ANCHORDB_NAMESPACE {
-Status PosixWritableFileWriter::submit_write_(const char *src, size_t len, uint64_t offset) {
-    // io_uring unavailable: use pwrite(2) at the explicit offset so the
-    // writer never depends on a shared file position.
-    if (ring_ == nullptr) { return file_internal::sync_pwrite(filename_, fd_, src, len, offset); }
-
-#if !HAS_IO_URING
-    return Status::not_supported(std::string_view("io_uring support not compiled in"));
-#else
-    size_t total_written = 0;
-    while (total_written < len) {
-        struct io_uring_sqe *sqe = io_uring_get_sqe(ring_);
-        if (!sqe) {
-            int submit_ret = io_uring_submit(ring_);
-            if (submit_ret < 0) { return posix_error(filename_, -submit_ret); }
-            sqe = io_uring_get_sqe(ring_);
-            if (!sqe) { return posix_error(filename_, EBUSY); }
-        }
-
-        const char *current_src = src + total_written;
-        size_t current_len = len - total_written;
-        uint64_t current_offset = offset + total_written;
-
-        io_uring_prep_write(sqe, fd_, current_src, current_len, current_offset);
-        io_uring_sqe_set_data(sqe, nullptr);
-
-        int submit_ret = io_uring_submit_and_wait(ring_, 1);
-        if (submit_ret < 0) { return posix_error(filename_, -submit_ret); }
-
-        struct io_uring_cqe *cqe = nullptr;
-        int wait_ret = io_uring_wait_cqe(ring_, &cqe);
-        if (wait_ret < 0) { return posix_error(filename_, -wait_ret); }
-
-        int res = cqe->res;
-        io_uring_cqe_seen(ring_, cqe);
-
-        if (res < 0) {
-            if (-res == EINTR) { continue; }
-            return posix_error(filename_, -res);
-        }
-
-        if (res == 0) { return posix_error(filename_, ENOSPC); }
-
-        total_written += static_cast<size_t>(res);
-
-        if (direct_io_ && (res % kDirectIOAlignment != 0) && (total_written < len)) {
-            return posix_error(filename_, EINVAL);
-        }
-    }
-
-    return Status::ok();
-#endif
+Status PosixWritableFileWriter::write_at_(const char *src, size_t len, uint64_t offset) {
+    // Positional write: the writer never depends on a shared file position.
+    return file_internal::sync_pwrite(filename_, fd_, src, len, offset);
 }
 
 Status PosixWritableFileWriter::append(std::string_view data) {
@@ -83,7 +35,7 @@ Status PosixWritableFileWriter::append(std::string_view data) {
             bool is_len_aligned = (left % kDirectIOAlignment == 0);
 
             if (is_src_aligned && is_offset_aligned && is_len_aligned) {
-                Status s = submit_write_(src, left, filesize_);
+                Status s = write_at_(src, left, filesize_);
                 if (!s.is_ok()) return s;
                 filesize_ += left;
                 buf_offset_ = filesize_;
@@ -139,7 +91,7 @@ Status PosixWritableFileWriter::flush_buffer() {
     const size_t logical_bytes = buf_.current_size();
 
     if (!direct_io_) {
-        Status s = submit_write_(buf_.data(), logical_bytes, buf_offset_);
+        Status s = write_at_(buf_.data(), logical_bytes, buf_offset_);
         if (!s.is_ok()) return s;
         buf_.clear();
         buf_offset_ = filesize_;
@@ -173,7 +125,7 @@ Status PosixWritableFileWriter::flush_buffer() {
         std::memcpy(lead_block.data() + leading, buf_.data(), logical_bytes);
         std::memset(lead_block.data() + leading + logical_bytes, 0, total - leading - logical_bytes);
 
-        s = submit_write_(lead_block.data(), total, aligned_start);
+        s = write_at_(lead_block.data(), total, aligned_start);
         if (!s.is_ok()) return s;
         written = lead_block.data() + leading;
         write_offset = aligned_start;
@@ -181,7 +133,7 @@ Status PosixWritableFileWriter::flush_buffer() {
     } else {
         const size_t padded = round_up(logical_bytes, kDirectIOAlignment);
         std::memset(buf_.data() + logical_bytes, 0, padded - logical_bytes);
-        Status s = submit_write_(buf_.data(), padded, buf_offset_);
+        Status s = write_at_(buf_.data(), padded, buf_offset_);
         if (!s.is_ok()) return s;
         write_len = padded;
     }

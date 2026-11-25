@@ -14,142 +14,124 @@
 
 #include "anchordb/anchordb_namespace.h"
 #include "file_meta.h"
-#include "io_uring_config.h" // IWYU pragma: keep
+#include "port/port.h" // IWYU pragma: keep
 #include "sequential_reader.h"
 #include "sync_io.h"
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
 #include <fcntl.h>
 #include <unistd.h>
 
 namespace ANCHORDB_NAMESPACE {
 
-Status PosixSequentialFileReader::submit_read_(void *dst, size_t len, uint64_t offset, size_t *bytes_read) {
-    *bytes_read = 0;
+namespace {
 
-    // io_uring unavailable: the caller supplied an explicit offset, so pread
-    // is the correct synchronous primitive.
-    if (ring_ == nullptr) {
-        return file_internal::sync_pread(filename_, fd_, static_cast<char *>(dst), len, offset, bytes_read);
+constexpr uintptr_t kAlignMask = static_cast<uintptr_t>(kDirectIOAlignment) - 1;
+
+bool is_aligned(uintptr_t x) { return (x & kAlignMask) == 0; }
+
+} // namespace
+
+Status PosixSequentialFileReader::refill_buffer_() {
+    if (buf_.capacity() == 0) {
+        return Status::io_error(std::string_view("sequential reader: O_DIRECT bounce buffer is empty"), filename_);
     }
 
-#if !HAS_IO_URING
-    return Status::not_supported(std::string_view("io_uring support not compiled in"));
-#else
-    size_t total_read = 0;
-    while (total_read < len) {
-        struct io_uring_sqe *sqe = io_uring_get_sqe(ring_);
-        if (!sqe) {
-            int submit_ret = io_uring_submit(ring_);
-            if (submit_ret < 0) { return posix_error(filename_, -submit_ret); }
-            sqe = io_uring_get_sqe(ring_);
-            if (!sqe) { return posix_error(filename_, EBUSY); }
-        }
+    // Read the block-aligned window that contains offset_, so the bytes at
+    // offset_ land somewhere in [buf_file_offset_, buf_file_offset_ + valid).
+    const uint64_t aligned_offset = offset_ & ~static_cast<uint64_t>(kDirectIOAlignment - 1);
+    size_t got = 0;
+    Status s = file_internal::sync_pread(filename_, fd_, buf_.data(), buf_.capacity(), aligned_offset, &got);
+    if (!s.is_ok()) { return s; }
 
-        void *current_dst = static_cast<char *>(dst) + total_read;
-        size_t current_len = len - total_read;
-        uint64_t current_offset = offset + total_read;
-
-        io_uring_prep_read(sqe, fd_, current_dst, current_len, current_offset);
-
-        int submit_ret = io_uring_submit_and_wait(ring_, 1);
-        if (submit_ret < 0) { return posix_error(filename_, -submit_ret); }
-
-        struct io_uring_cqe *cqe = nullptr;
-        int wait_ret = io_uring_wait_cqe(ring_, &cqe);
-        if (wait_ret < 0) { return posix_error(filename_, -wait_ret); }
-
-        int res = cqe->res;
-        io_uring_cqe_seen(ring_, cqe);
-
-        if (res < 0) {
-            if (-res == EINTR) { continue; }
-            return posix_error(filename_, -res);
-        }
-
-        if (res == 0) { break; }
-
-        total_read += static_cast<size_t>(res);
-
-        if (direct_io_ && (res % kDirectIOAlignment != 0)) { break; }
-    }
-
-    *bytes_read = total_read;
+    buf_file_offset_ = aligned_offset;
+    buf_bytes_valid_ = got;
     return Status::ok();
-#endif
+}
+
+void PosixSequentialFileReader::advise_sequential_() {
+    if (advised_) { return; }
+    advised_ = true;
+    // Advisory only; ignore the result (ENOSYS on old kernels, ENOTSUP on some
+    // filesystems).  A larger readahead window is all we are asking for.
+    (void)::posix_fadvise(fd_, 0, 0, POSIX_FADV_SEQUENTIAL);
+}
+
+void PosixSequentialFileReader::prefetch_() {
+    // Start populating the page cache for the next window; read(2) will then
+    // find it resident instead of blocking on each 4K page.
+    (void)::posix_fadvise(fd_, static_cast<off_t>(offset_), static_cast<off_t>(kSeqFileReaderBufSize),
+                          POSIX_FADV_WILLNEED);
 }
 
 Status PosixSequentialFileReader::read(size_t n, std::string_view *result, char *scratch) {
     *result = std::string_view();
-    if (n == 0) return Status::ok();
+    if (n == 0) { return Status::ok(); }
 
-    size_t total_copied = 0;
+    if (!direct_io_) { advise_sequential_(); }
 
-    while (total_copied < n) {
+    size_t total = 0;
+
+    while (total < n) {
+        // Serve whatever the bounce window already holds at offset_.
         if (offset_ >= buf_file_offset_ && offset_ < buf_file_offset_ + buf_bytes_valid_) {
+            const size_t in_buf = static_cast<size_t>(offset_ - buf_file_offset_);
+            const size_t take = std::min(n - total, buf_bytes_valid_ - in_buf);
 
-            size_t buf_internal_offset = static_cast<size_t>(offset_ - buf_file_offset_);
-            size_t available_bytes = buf_bytes_valid_ - buf_internal_offset;
-            size_t bytes_to_copy = std::min(n - total_copied, available_bytes);
-
-            std::memcpy(scratch + total_copied, buf_.data() + buf_internal_offset, bytes_to_copy);
-
-            total_copied += bytes_to_copy;
-            offset_ += bytes_to_copy;
-
-            if (total_copied == n) break;
-        }
-
-        if (!direct_io_) {
-            size_t bytes_read = 0;
-            if (ring_ != nullptr) {
-                Status s = submit_read_(scratch + total_copied, n - total_copied, offset_, &bytes_read);
-                if (!s.is_ok()) return s;
-            } else {
-                // No io_uring: read(2) lets the kernel maintain the file
-                // offset and readahead.
-                Status s =
-                    file_internal::sync_read(filename_, fd_, scratch + total_copied, n - total_copied, &bytes_read);
-                if (!s.is_ok()) return s;
-            }
-
-            if (bytes_read == 0) break;
-            total_copied += bytes_read;
-            offset_ += bytes_read;
-            break;
-        }
-
-        size_t remaining_req = n - total_copied;
-        bool is_dst_aligned = (reinterpret_cast<uintptr_t>(scratch + total_copied) % kDirectIOAlignment == 0);
-        bool is_offset_aligned = (offset_ % kDirectIOAlignment == 0);
-
-        if (remaining_req >= buf_.capacity() && is_dst_aligned && is_offset_aligned) {
-            size_t aligned_len = remaining_req & ~static_cast<size_t>(kDirectIOAlignment - 1);
-            size_t bytes_read = 0;
-
-            Status s = submit_read_(scratch + total_copied, aligned_len, offset_, &bytes_read);
-            if (!s.is_ok()) return s;
-
-            total_copied += bytes_read;
-            offset_ += bytes_read;
-
-            buf_bytes_valid_ = 0;
-
-            if (bytes_read < aligned_len) break;
+            std::memcpy(scratch + total, buf_.data() + in_buf, take);
+            total += take;
+            offset_ += take;
             continue;
         }
 
-        uint64_t aligned_offset = offset_ & ~static_cast<uint64_t>(kDirectIOAlignment - 1);
-        size_t bytes_read = 0;
+        // Buffered path: read(2) lets the kernel keep the file position and
+        // drive readahead; skip() moves that position with lseek().
+        if (!direct_io_) {
+            size_t got = 0;
+            Status s = file_internal::sync_read(filename_, fd_, scratch + total, n - total, &got);
+            if (!s.is_ok()) { return s; }
 
-        Status s = submit_read_(buf_.data(), buf_.capacity(), aligned_offset, &bytes_read);
-        if (!s.is_ok()) return s;
+            if (got == 0) { break; } // end of file
 
-        buf_file_offset_ = aligned_offset;
-        buf_bytes_valid_ = bytes_read;
+            total += got;
+            offset_ += got;
+            prefetch_();
+            continue;
+        }
 
+        // O_DIRECT fast path: an aligned request of at least one buffer's
+        // worth is read straight into the caller, skipping the bounce buffer.
+        const size_t want = n - total;
+        char *const dst = scratch + total;
+        if (buf_.capacity() != 0 && want >= buf_.capacity() && is_aligned(offset_) &&
+            is_aligned(reinterpret_cast<uintptr_t>(dst))) {
+            // O_DIRECT needs a block-multiple length; the sub-block remainder,
+            // if any, is picked up by the bounce path on the next iteration.
+            const size_t len = want & ~static_cast<size_t>(kDirectIOAlignment - 1);
+            size_t got = 0;
+            Status s = file_internal::sync_pread(filename_, fd_, dst, len, offset_, &got);
+            if (!s.is_ok()) { return s; }
+
+            total += got;
+            offset_ += got;
+            buf_bytes_valid_ = 0;     // the stale window, if any, now lies behind us
+            if (got < len) { break; } // short aligned read means end of file
+            continue;
+        }
+
+        // O_DIRECT fallback: stage a block-aligned window through buf_ and
+        // loop back to copy out of it.  This is the only path that handles
+        // unaligned offsets, unaligned destinations, and small reads.
+        Status s = refill_buffer_();
+        if (!s.is_ok()) { return s; }
+
+        // If the refilled window does not reach offset_ it is because the file
+        // ended first; there is nothing more to read.
         if (offset_ >= buf_file_offset_ + buf_bytes_valid_) { break; }
     }
 
-    *result = std::string_view(scratch, total_copied);
+    *result = std::string_view(scratch, total);
     return Status::ok();
 }
 
@@ -158,7 +140,9 @@ Status PosixSequentialFileReader::skip(uint64_t n) {
 
     if (offset_ < buf_file_offset_ || offset_ >= buf_file_offset_ + buf_bytes_valid_) { buf_bytes_valid_ = 0; }
 
-    if (!direct_io_ && ring_ == nullptr) {
+    if (!direct_io_) {
+        // The buffered path reads through the kernel file position, so keep it
+        // in step with offset_.
         if (::lseek(fd_, static_cast<off_t>(offset_), SEEK_SET) == static_cast<off_t>(-1)) {
             return posix_error(filename_, errno);
         }

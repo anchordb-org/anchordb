@@ -41,8 +41,6 @@ target_sources(anchordb
 
 target_sources(anchordb
     PRIVATE
-        src/memory/arena.h
-        src/memory/arena.cc
         src/memtable/skiplist.h
         src/memtable/entry.h
         src/memtable/entry.cc
@@ -56,9 +54,10 @@ target_sources(anchordb
         src/env/env_default.h
         src/file/filename.h
         src/file/filename.cc
-        src/file/io_uring_config.h
         src/file/sync_io.h
         src/util/aligned_buffer.h
+        src/util/arena.h
+        src/util/arena.cc
         src/util/comparator.cc
         src/util/compressor.cc
         src/util/status.cc
@@ -166,6 +165,8 @@ elseif (UNIX AND NOT APPLE)
             src/file/lock_table.h
             src/file/random_access_reader.cc
             src/file/random_access_reader.h
+            src/file/read_batcher.cc
+            src/file/read_batcher.h
             src/file/sequential_reader.h
             src/file/sequential_reader.cc
             src/file/writer.cc
@@ -292,6 +293,10 @@ if(ANCHORDB_USE_TCMALLOC)
     if(TCMALLOC_FOUND)
         target_link_libraries(anchordb PUBLIC ${TCMALLOC_LIBRARIES})
         target_include_directories(anchordb PUBLIC ${TCMALLOC_INCLUDE_DIRS})
+        # Lets code that trades CPU for allocation pick its strategy per
+        # configuration (interrogated in port/port.h).  PUBLIC because it must
+        # describe the allocator of the final binary, not just this library.
+        target_compile_definitions(anchordb PUBLIC ANCHORDB_HAS_TCMALLOC=1)
         message(STATUS "tcmalloc found! Linking it globally as the allocator.")
     else()
         message(WARNING

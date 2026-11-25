@@ -24,14 +24,18 @@
 
 namespace ANCHORDB_NAMESPACE {
 
-// Sequential reader backed by io_uring, falling back to read(2).  Not
-// thread-safe.  When `buf` is supplied it is used as the O_DIRECT bounce
-// buffer; otherwise one is allocated on demand.
+// Sequential reader backed by synchronous read(2)/pread(2).  Not thread-safe.
+//
+// With O_DIRECT, a request whose offset and destination are block-aligned and
+// that spans at least one buffer is read straight into the caller's memory;
+// every other request falls back through the aligned bounce buffer `buf`.  When
+// `buf` is supplied it is used as that bounce buffer, otherwise one is
+// allocated on demand.
 class PosixSequentialFileReader final : public SequentialFileReader {
   public:
-    PosixSequentialFileReader(std::string filename, int fd, struct io_uring *ring, AlignedBuffer *buf = nullptr,
-                              size_t buffer_size = 0, bool direct_io = false)
-        : fd_(fd), filename_(std::move(filename)), ring_(ring), offset_(0), direct_io_(direct_io), buf_file_offset_(0),
+    PosixSequentialFileReader(std::string filename, int fd, AlignedBuffer *buf = nullptr, size_t buffer_size = 0,
+                              bool direct_io = false)
+        : fd_(fd), filename_(std::move(filename)), offset_(0), direct_io_(direct_io), buf_file_offset_(0),
           buf_bytes_valid_(0) {
         if (buf != nullptr) {
             buf_ = std::move(*buf);
@@ -49,16 +53,25 @@ class PosixSequentialFileReader final : public SequentialFileReader {
     Status skip(uint64_t n) override;
 
   private:
-    Status submit_read_(void *dst, size_t len, uint64_t offset, size_t *bytes_read);
+    // Reads one block-aligned window into buf_ that covers offset_.  On return
+    // buf_bytes_valid_ is 0 at end of file, and unchanged on error.
+    Status refill_buffer_();
+
+    // Tells the kernel the file is read sequentially (grows its readahead
+    // window); done once, only for the buffered path.
+    void advise_sequential_();
+    // Asks the kernel to start reading the window that follows offset_; only
+    // meaningful for the buffered path, since O_DIRECT bypasses the page cache.
+    void prefetch_();
 
     const int fd_;
     const std::string filename_;
-    struct io_uring *const ring_;
     uint64_t offset_;
     const bool direct_io_;
 
     AlignedBuffer buf_;
     uint64_t buf_file_offset_;
     size_t buf_bytes_valid_;
+    bool advised_ = false;
 };
 } // namespace ANCHORDB_NAMESPACE

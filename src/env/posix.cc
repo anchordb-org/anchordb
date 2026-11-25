@@ -17,10 +17,10 @@
 #include "env/env_default.h"
 #include "env/posix.h"
 #include "file/random_access_reader.h"
+#include "file/read_batcher.h"
 #include "file/sequential_reader.h"
 #include "file/writer.h"
 #include "util/posix_logger.h"
-
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -30,6 +30,7 @@
 #include <memory>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "anchordb/anchordb_namespace.h"
@@ -130,8 +131,6 @@ struct io_uring *PosixEnv::get_thread_local_ring() {
 
 Status PosixEnv::new_sequential_file_reader(const std::string &filename, SequentialFileReader **result,
                                             size_t buffer_size) {
-    struct io_uring *ring = get_thread_local_ring();
-
     int flags = O_RDONLY | kOpenBaseFlags;
     if (direct_io_) { flags |= O_DIRECT; }
 
@@ -140,16 +139,13 @@ Status PosixEnv::new_sequential_file_reader(const std::string &filename, Sequent
 
     size_t buf_size = (buffer_size != 0) ? buffer_size : kSeqFileReaderBufSize;
     AlignedBuffer buf(buf_size, kDirectIOAlignment);
-    *result = new PosixSequentialFileReader(filename, fd, ring, &buf, buf_size, direct_io_);
+    *result = new PosixSequentialFileReader(filename, fd, &buf, buf_size, direct_io_);
 
     return Status::ok();
 }
 
 Status PosixEnv::new_random_access_file_reader(const std::string &filename, RandomAccessFileReader **result) {
     int fd = -1;
-
-    // Calling thread's io_uring ring (nullptr when unavailable).
-    struct io_uring *ring = get_thread_local_ring();
 
     if (fd_limiter_.acquire()) {
         int flags = O_RDONLY | kOpenBaseFlags;
@@ -164,15 +160,33 @@ Status PosixEnv::new_random_access_file_reader(const std::string &filename, Rand
         }
     }
 
-    *result = new PosixRandomAccessFileReader(filename, fd, &fd_limiter_, ring, direct_io_);
+    // The reader resolves this thread's batcher per call (see
+    // read_batcher_for_thread()), so it is never bound to the opening thread's.
+    *result = new PosixRandomAccessFileReader(filename, fd, &fd_limiter_, this, direct_io_);
     return Status::ok();
+}
+
+ReadBatcher *PosixEnv::read_batcher_for_thread() { return batcher_for_thread_(); }
+
+ReadBatcher *PosixEnv::batcher_for_thread_() {
+    // One batcher per thread, owned here and resolved by every reader this
+    // environment hands out, so it has a lifetime the readers can rely on.  It
+    // is bound to this thread's ring (nullptr without io_uring) and, like that
+    // ring, is created on first use and freed when the thread exits; destroying
+    // it by hand while readers still borrowed it would dangle their pointers.
+    thread_local std::unordered_map<uint64_t, std::unique_ptr<ReadBatcher>> batchers;
+
+    auto it = batchers.find(env_id_);
+    if (it != batchers.end()) { return it->second.get(); }
+
+    std::unique_ptr<ReadBatcher> batcher(new PosixReadBatcher(get_thread_local_ring(), direct_io_));
+    ReadBatcher *const raw = batcher.get();
+    batchers.emplace(env_id_, std::move(batcher));
+    return raw;
 }
 
 Status PosixEnv::new_writable_file_writer(const std::string &filename, WritableFileWriter **result,
                                           size_t buffer_size) {
-    // Calling thread's io_uring ring (nullptr when unavailable).
-    struct io_uring *ring = get_thread_local_ring();
-
     int flags = O_CREAT | O_WRONLY | O_TRUNC | kOpenBaseFlags;
     if (direct_io_) { flags |= O_DIRECT; }
 
@@ -181,16 +195,13 @@ Status PosixEnv::new_writable_file_writer(const std::string &filename, WritableF
 
     size_t buf_size = (buffer_size != 0) ? buffer_size : kWritableFileBufSize;
     AlignedBuffer buf(buf_size, kDirectIOAlignment);
-    *result = new PosixWritableFileWriter(filename, fd, ring, &buf, direct_io_);
+    *result = new PosixWritableFileWriter(filename, fd, &buf, direct_io_);
 
     return Status::ok();
 }
 
 Status PosixEnv::new_appendable_file_writer(const std::string &filename, WritableFileWriter **result,
                                             size_t buffer_size) {
-    // Calling thread's io_uring ring (nullptr when unavailable).
-    struct io_uring *ring = get_thread_local_ring();
-
     // O_APPEND and O_DIRECT do not mix: on Linux an append-mode write ignores
     // the supplied offset, so we could never place a block-aligned write. When
     // direct I/O is requested, position writes ourselves via the tracked file
@@ -216,7 +227,7 @@ Status PosixEnv::new_appendable_file_writer(const std::string &filename, Writabl
         return s;
     }
 
-    *result = new PosixWritableFileWriter(filename, fd, ring, &buf, direct_io_, file_size);
+    *result = new PosixWritableFileWriter(filename, fd, &buf, direct_io_, file_size);
 
     return Status::ok();
 }
@@ -362,6 +373,17 @@ Status PosixEnv::new_logger(const std::string &filename, Logger **result) {
         *result = new PosixLogger(fp);
         return Status::ok();
     }
+}
+
+Status PosixEnv::new_read_batcher(ReadBatcher **result) {
+    *result = nullptr;
+
+    // The batcher borrows this thread's ring (nullptr when io_uring is
+    // unavailable), so it must be used and destroyed on the calling thread:
+    // the ring is owned by the thread-local registry and freed when the thread
+    // exits.  A null ring is not an error; the batcher falls back to pread(2).
+    *result = new PosixReadBatcher(get_thread_local_ring(), direct_io_);
+    return Status::ok();
 }
 
 uint64_t PosixEnv::now_micros() {

@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "sstable/table_cache.h"
 #include "anchordb/cache.h"
 #include "anchordb/status.h"
 #include "db/entry_iterator.h"
+#include "sstable/table_cache.h"
 #include "sstable/table_file_set.h"
 #include "util/coding.h"
 #include <string>
@@ -64,7 +64,7 @@ Status TableCache::lookup_unresolved(uint64_t table_number, std::string_view key
     Status s = find_table(table_number, &pin, &reader);
     if (!s.is_ok()) { return s; }
 
-    return reader->get_raw(key, out, scratch);
+    return reader->get(key, out, scratch);
 }
 
 Status TableCache::new_iterator(uint64_t table_number, EntryIterator **iter) {

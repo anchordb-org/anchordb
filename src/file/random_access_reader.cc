@@ -12,177 +12,160 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "random_access_reader.h"
 #include "anchordb/anchordb_namespace.h"
 #include "file_meta.h"
-#include "io_uring_config.h" // IWYU pragma: keep
-#include "random_access_reader.h"
+#include "port/port.h" // IWYU pragma: keep
+#include "port/port_posix.h"
 #include "sync_io.h"
 #include "util/aligned_buffer.h"
+#include <cstring>
 #include <fcntl.h>
+#include <span>
 #include <string_view>
 #include <unistd.h>
 
 namespace ANCHORDB_NAMESPACE {
-Status PosixRandomAccessFileReader::submit_read_(int fd, void *buf, size_t n, uint64_t offset, size_t *bytes_read) {
-    *bytes_read = 0;
-#if !HAS_IO_URING
-    (void)fd;
-    (void)buf;
-    (void)n;
-    (void)offset;
-    return Status::not_supported(std::string_view("io_uring support not compiled in"));
-#else
-    size_t total_read = 0;
-    int sqe_count = 0;
 
-    // Submit reads in batches bounded by ring capacity, reaping each batch
-    // before queuing the next so no CQEs are left unowned.
-    while (total_read < n) {
-        // Free SQE slots available for this batch.
-        unsigned sq_space = io_uring_sq_space_left(ring_);
-        if (sq_space == 0) { return posix_error(filename_, EBUSY); }
+namespace {
 
-        int batch_count = 0;
-        size_t batch_bytes = 0;
+constexpr uintptr_t kAlignMask = static_cast<uintptr_t>(kDirectIOAlignment) - 1;
 
-        while (batch_bytes < n - total_read && batch_count < static_cast<int>(sq_space)) {
-            struct io_uring_sqe *sqe = io_uring_get_sqe(ring_);
-            if (!sqe) {
-                // Guarded by sq_space, but stay safe.
-                break;
-            }
+bool is_aligned(uintptr_t x) { return (x & kAlignMask) == 0; }
 
-            void *current_dst = static_cast<char *>(buf) + total_read + batch_bytes;
-            size_t current_len = n - total_read - batch_bytes;
-            uint64_t current_offset = offset + total_read + batch_bytes;
-
-            io_uring_prep_read(sqe, fd, current_dst, current_len, current_offset);
-            io_uring_sqe_set_data(sqe, nullptr);
-            batch_count++;
-            batch_bytes += current_len;
-        }
-
-        // Submit this batch
-        int submit_ret = io_uring_submit(ring_);
-        if (submit_ret < 0) { return posix_error(filename_, -submit_ret); }
-
-        // Reap completions for this batch only
-        for (int i = 0; i < batch_count; i++) {
-            struct io_uring_cqe *cqe = nullptr;
-            int wait_ret = io_uring_wait_cqe(ring_, &cqe);
-            if (wait_ret < 0) { return posix_error(filename_, -wait_ret); }
-
-            int res = cqe->res;
-            io_uring_cqe_seen(ring_, cqe);
-
-            if (res < 0) {
-                if (-res == EINTR) {
-                    i--; // retry this completion
-                    continue;
-                }
-                return posix_error(filename_, -res);
-            }
-
-            if (res == 0) {
-                // EOF reached; stop processing further batches
-                total_read += static_cast<size_t>(res);
-                *bytes_read = total_read;
-                return Status::ok();
-            }
-
-            total_read += static_cast<size_t>(res);
-
-            if (direct_io_ && (res % kDirectIOAlignment != 0)) {
-                // Short read under O_DIRECT; stop here
-                *bytes_read = total_read;
-                return Status::ok();
-            }
-        }
-
-        sqe_count += batch_count;
+// Closes a transient fd when this scope ends; owns nothing otherwise.
+struct FdCloser {
+    int fd;
+    bool owned;
+    ~FdCloser() {
+        if (owned && fd >= 0) { ::close(fd); }
     }
+};
 
-    *bytes_read = total_read;
+} // namespace
+
+Status PosixRandomAccessFileReader::open_transient_fd_(int *fd) const {
+    int flags = O_RDONLY | kOpenBaseFlags;
+    if (direct_io_) { flags |= O_DIRECT; }
+
+    const int opened = ::open(filename_.c_str(), flags, 0644);
+    if (opened < 0) { return posix_error(filename_, errno); }
+    *fd = opened;
     return Status::ok();
-#endif
 }
 
 Status PosixRandomAccessFileReader::read(uint64_t offset, size_t n, std::string_view *result, char *scratch) {
     *result = std::string_view();
-    int target_fd = -1;
 
-    if (has_permanent_fd_) {
-        target_fd = fd_;
-    } else {
-        int flags = O_RDONLY | O_CLOEXEC;
-        if (direct_io_) { flags |= O_DIRECT; }
-        target_fd = ::open(filename_.c_str(), flags, 0644);
-        if (target_fd < 0) { return posix_error(filename_, errno); }
+    int target_fd = fd_;
+    if (!has_permanent_fd_) {
+        Status s = open_transient_fd_(&target_fd);
+        if (!s.is_ok()) { return s; }
+    }
+    const FdCloser closer{target_fd, !has_permanent_fd_};
+
+    if (n == 0) { return Status::ok(); }
+
+    // Do not clamp the extent to the file size: pread(2) stops at end of file,
+    // so the caller gets a short result, and clamping an O_DIRECT extent to a
+    // non-block-aligned file size would leave an unaligned read length.
+    const size_t want = n;
+
+    // Under O_DIRECT the kernel requires an aligned buffer, offset and length,
+    // so a request that breaks any of those rules is bounced through an aligned
+    // buffer and the caller's window is copied out afterwards.
+    const bool needs_alignment =
+        direct_io_ && (scratch == nullptr || !is_aligned(reinterpret_cast<uintptr_t>(scratch)) ||
+                       !is_aligned(static_cast<uintptr_t>(offset)) || want % kDirectIOAlignment != 0);
+    if (!needs_alignment) {
+        size_t got = 0;
+        Status s = file_internal::sync_pread(filename_, target_fd, scratch, want, offset, &got);
+        if (!s.is_ok()) { return s; }
+        *result = std::string_view(scratch, got);
+        return Status::ok();
     }
 
-    struct TempFdGuard {
-        int fd;
-        bool is_temp;
-        ~TempFdGuard() {
-            if (is_temp && fd >= 0) { ::close(fd); }
-        }
-    } guard{target_fd, !has_permanent_fd_};
+    // Round the request out to whole blocks.  It may cross the end of file,
+    // which only makes the kernel return a short read.
+    const uint64_t read_offset = offset & ~static_cast<uint64_t>(kAlignMask);
+    const size_t skip = static_cast<size_t>(offset - read_offset);
+    const uint64_t end = static_cast<uint64_t>(offset + want);
+    const uint64_t aligned_end = (end + kAlignMask) & ~static_cast<uint64_t>(kAlignMask);
+    const size_t read_size = static_cast<size_t>(aligned_end - read_offset);
 
-    uint64_t read_offset = offset;
-    size_t read_bytes = n;
-    char *target_buf = scratch;
+#if ANCHORDB_HAS_TCMALLOC
+    // A buffer private to this call: with tcmalloc an aligned allocation is a
+    // per-thread size-class hit that scales with threads, whereas a shared
+    // buffer must be held under a mutex across the pread and collapses under
+    // contention.
+    AlignedBuffer bounce(read_size, kDirectIOAlignment);
+    if (!bounce.is_allocated()) { return Status::io_error("read: cannot allocate aligned buffer", filename_); }
 
-    // Function scope so the bounce buffer outlives submit_read_().
-    AlignedBuffer aligned_buf;
+    size_t got = 0;
+    Status s = file_internal::sync_pread(filename_, target_fd, bounce.data(), read_size, read_offset, &got);
+    if (!s.is_ok()) { return s; }
 
-    if (direct_io_) {
-        bool is_scratch_aligned = (reinterpret_cast<uintptr_t>(scratch) % kDirectIOAlignment == 0);
-        bool is_offset_aligned = (offset % kDirectIOAlignment == 0);
-        bool is_len_aligned = (n % kDirectIOAlignment == 0);
+    // Copy the window out: the buffer dies with this call, so the caller must not
+    // be handed a view into it.
+    const size_t payload = got > skip ? std::min(got - skip, want) : 0;
+    if (payload > 0) { std::memcpy(scratch, bounce.data() + skip, payload); }
+    *result = std::string_view(scratch, payload);
+    return Status::ok();
+#else
+    // posix_memalign/free is ~39 ns on glibc, so a cached buffer beats spending
+    // it per read.  The guard covers the pread and the copy out of aligned_buf_,
+    // which is what makes this path safe for concurrent reads on one reader.
+    std::lock_guard<std::mutex> lock(mu_);
 
-        if (is_scratch_aligned && is_offset_aligned && is_len_aligned) {
-            target_buf = scratch;
-        } else {
-            read_offset = offset & ~(static_cast<uint64_t>(kDirectIOAlignment) - 1);
-            uint64_t end_offset =
-                ((offset + n) + kDirectIOAlignment - 1) & ~(static_cast<uint64_t>(kDirectIOAlignment) - 1);
-            read_bytes = static_cast<size_t>(end_offset - read_offset);
+    if (aligned_buf_.capacity() < read_size) { aligned_buf_.re_allocate(read_size); }
+    if (!aligned_buf_.is_allocated()) { return Status::io_error("read: cannot allocate aligned buffer", filename_); }
 
-            aligned_buf = AlignedBuffer(read_bytes, kDirectIOAlignment);
-            if (!aligned_buf.is_allocated()) {
-                return Status::io_error(std::string_view("Failed to allocate sector-aligned buffer for O_DIRECT"));
-            }
-            target_buf = aligned_buf.data();
-        }
+    size_t got = 0;
+    Status s = file_internal::sync_pread(filename_, target_fd, aligned_buf_.data(), read_size, read_offset, &got);
+    if (!s.is_ok()) { return s; }
+
+    // Same copy-out rule as above; the lock only needs to cover the bounce
+    // buffer being reused, not the caller's scratch.
+    const size_t payload = got > skip ? std::min(got - skip, want) : 0;
+    if (payload > 0) { std::memcpy(scratch, aligned_buf_.data() + skip, payload); }
+    *result = std::string_view(scratch, payload);
+    return Status::ok();
+#endif
+}
+
+Status PosixRandomAccessFileReader::queue_read(uint64_t offset, size_t n, char *scratch, Status *status,
+                                               size_t *bytes_read, bool *done) {
+    if (!has_permanent_fd_) { return Status::not_supported("queue_read: no permanent descriptor"); }
+    ReadBatcher *b = batcher();
+    if (b == nullptr) { return Status::not_supported("queue_read: no read batcher"); }
+
+    if (!b->add(fd_, BatchReadOp{offset, n, scratch, status, bytes_read, done})) {
+        return Status::not_supported("queue_read: batcher busy");
     }
-
-    size_t bytes_read = 0;
-    Status status;
-    if (ring_ == nullptr) {
-        // No io_uring: pread(2) is positional and thread-safe.
-        status = file_internal::sync_pread(filename_, target_fd, target_buf, read_bytes, read_offset, &bytes_read);
-        if (!status.is_ok()) { return status; }
-    } else {
-        status = submit_read_(target_fd, target_buf, read_bytes, read_offset, &bytes_read);
-        if (!status.is_ok()) { return status; }
-    }
-
-    if (direct_io_) {
-        uint64_t internal_offset = offset - read_offset;
-
-        if (bytes_read <= internal_offset) {
-            *result = std::string_view(scratch, 0);
-            return Status::ok();
-        }
-
-        size_t actual_payload_bytes = std::min(static_cast<size_t>(bytes_read - internal_offset), n);
-
-        if (target_buf != scratch) { std::memcpy(scratch, target_buf + internal_offset, actual_payload_bytes); }
-        *result = std::string_view(scratch, actual_payload_bytes);
-    } else {
-        *result = std::string_view(scratch, bytes_read);
-    }
-
     return Status::ok();
 }
+
+Status PosixRandomAccessFileReader::read_batch(std::span<BatchReadOp> ops) {
+    if (ops.empty()) { return Status::ok(); }
+    if (!has_permanent_fd_) { return Status::not_supported("read_batch: no permanent descriptor"); }
+    ReadBatcher *b = batcher();
+    if (b == nullptr) { return Status::not_supported("read_batch: no read batcher"); }
+
+    // The batcher is shared with queue_read(), so this call may never partially
+    // enqueue.  Only the first add() can reject (the generation is either busy
+    // for all of them or accepting for all), so fail before touching the queue.
+    if (!b->add(fd_, ops[0])) { return Status::not_supported("read_batch: batcher busy"); }
+    for (size_t i = 1; i < ops.size(); i++) {
+        if (!b->add(fd_, ops[i])) {
+            // The contract above says this cannot happen, but if add() ever
+            // gains another rejection path, run what we queued so the caller's
+            // buffers are released instead of being stranded in the batcher.
+            (void)b->execute();
+            return Status::not_supported("read_batch: batcher busy");
+        }
+    }
+
+    return b->execute();
+}
+
 } // namespace ANCHORDB_NAMESPACE
